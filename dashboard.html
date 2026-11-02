@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Hearthling · Settings</title>
+  <link rel="icon" href="avatar.png" type="image/png">
+  <link rel="stylesheet" href="dashboard.css">
+  <script src="dashboard.js" defer></script>
+  <script src="dashboard-extra.js" defer></script>
+</head>
+<body>
+  <main id="sign-in" class="sign-in">
+    <img src="avatar.png" alt="Hearthling, a small amber ember spirit in a knitted scarf" width="112" height="112">
+    <p class="eyebrow">Your companion's settings</p>
+    <h1>Welcome back.</h1>
+    <p id="sign-in-message" role="status">Checking your sign-in…</p>
+    <div id="sign-in-help" hidden>
+      <p>Sign-in links are private, work once and expire in ten minutes. Ask me in Discord, or have me send one to your DMs now.</p>
+      <pre><code>@Hearthling dashboard</code></pre>
+      <div class="sign-in-actions">
+        <button id="send-link" type="button">Send me a new link</button>
+        <button id="retry-sign-in" type="button" class="secondary">Check sign-in again</button>
+      </div>
+    </div>
+  </main>
+
+  <div id="app" class="app" hidden>
+    <a href="#main" class="skip-link">Skip to settings</a>
+    <aside class="sidebar">
+      <div class="identity">
+        <img src="avatar.png" alt="" width="58" height="58">
+        <div><p class="wordmark">Hearthling<span>.</span></p><p class="identity-note">Keeping the fire lit.</p></div>
+      </div>
+      <div class="bot-picker"><label for="bot-select">Editing bot</label><select id="bot-select" aria-describedby="selected-bot"></select></div>
+      <nav id="tabs" role="tablist" aria-label="Settings" aria-orientation="vertical">
+        <button type="button" id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" data-tab="overview">Overview</button>
+        <button type="button" id="tab-bots" role="tab" aria-controls="panel-bots" aria-selected="false" tabindex="-1" data-tab="bots">Bots</button>
+        <button type="button" id="tab-personality" role="tab" aria-controls="panel-personality" aria-selected="false" tabindex="-1" data-tab="personality">Personality</button>
+        <button type="button" id="tab-connections" role="tab" aria-controls="panel-connections" aria-selected="false" tabindex="-1" data-tab="connections">Connections</button>
+        <button type="button" id="tab-tools" role="tab" aria-controls="panel-tools" aria-selected="false" tabindex="-1" data-tab="tools">Tools</button>
+        <button type="button" id="tab-automation" role="tab" aria-controls="panel-automation" aria-selected="false" tabindex="-1" data-tab="automation">Automation</button>
+        <button type="button" id="tab-reminders" role="tab" aria-controls="panel-reminders" aria-selected="false" tabindex="-1" data-tab="reminders">Reminders</button>
+        <button type="button" id="tab-maintenance" role="tab" aria-controls="panel-maintenance" aria-selected="false" tabindex="-1" data-tab="maintenance">Maintenance</button>
+        <button type="button" id="tab-memories" role="tab" aria-controls="panel-memories" aria-selected="false" tabindex="-1" data-tab="memories">Memories <span id="memory-count" class="count">0</span></button>
+      </nav>
+      <div class="sidebar-bottom"><span class="owner-label">Owner access</span><button type="button" id="sign-out" class="text-button">Sign out</button></div>
+    </aside>
+
+    <main id="main" class="workspace" tabindex="-1">
+      <p id="selected-bot" class="selected-bot">Loading account…</p>
+      <p id="bot-mode-note" class="notice" hidden>Chatbot mode keeps conversation, memories, reactions and existing server emojis and stickers. Practical tools and expression uploads are off. Change its type in Bots.</p>
+      <p id="page-notice" class="notice" role="status" hidden></p>
+
+      <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <header class="page-heading"><p class="eyebrow">At a glance</p><h1>How am I doing?</h1><p>Current connections and the work I've actually done.</p></header>
+        <div class="presence"><span id="connection-dot" class="status-dot"></span><strong id="connection-status">Checking Discord…</strong><span id="request-status" class="muted"></span></div>
+        <dl class="connection-list">
+          <div><dt>Conversation</dt><dd><strong id="chat-model">Loading…</strong><span id="chat-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="chat">Test connection</button></div>
+          <div><dt>Pictures</dt><dd><strong id="image-provider-name">Default image provider</strong><span id="image-status" class="muted">Not checked yet</span></dd><span class="row-note">Requested in Discord</span></div>
+          <div><dt>Web search</dt><dd><strong>Brave Search</strong><span id="search-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="web_search">Test search</button></div>
+          <div><dt>Host machine</dt><dd><strong>Read-only health checks</strong><span id="host-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="host_status">Check host</button></div>
+        </dl>
+        <div id="check-result" class="check-result" role="status" hidden></div>
+        <div class="section-heading"><h2>Recent work</h2><button type="button" id="refresh-status" class="text-button">Refresh</button></div>
+        <ol id="activity-list" class="activity-list"></ol>
+        <p id="activity-empty" class="empty">Nothing to report yet. Requests made in Discord will appear here with their real outcomes.</p>
+      </section>
+
+      <section id="panel-bots" role="tabpanel" aria-labelledby="tab-bots" hidden>
+        <header class="page-heading"><p class="eyebrow">Discord accounts</p><h1>A little company.</h1><p>Each bot has its own character and settings. Saved memories are shared across bots and channels.</p></header>
+        <div class="section-heading"><h2>Your bots</h2><button type="button" id="add-bot" class="secondary small">Add bot</button></div>
+        <p id="bot-notice" class="form-status" role="status"></p>
+        <div id="bot-list"></div>
+        <form id="bot-editor" class="bot-editor" hidden>
+          <h2 id="bot-editor-title">Add a Discord bot</h2>
+          <p id="bot-editor-help" class="field-help">A new account starts with a copy of the main bot's provider keys and tool settings, and a separate character. Edit it after adding.</p>
+          <label for="bot-name">Character name</label><input id="bot-name" maxlength="50" required aria-describedby="bot-name-help">
+          <p id="bot-name-help" class="field-help">Used in conversation and as the name trigger. Your Discord account name and avatar are kept.</p>
+          <label for="bot-mode">Bot type</label><select id="bot-mode" aria-describedby="bot-mode-help"><option value="chatbot">Chatbot · conversation and memories</option><option value="assistant">Assistant · conversation and practical tools</option></select>
+          <p id="bot-mode-help" class="field-help">Both types can use server emojis, reactions and stickers. Assistants can also search, generate pictures, set reminders and add expressions on request. Moderation stays owner-only.</p>
+          <label for="bot-server">Discord server ID</label><input id="bot-server" inputmode="numeric" pattern="[0-9]{15,21}" required>
+          <label for="bot-token">Discord bot token</label><input type="password" id="bot-token" maxlength="4096" autocomplete="new-password" aria-describedby="bot-token-help">
+          <p id="bot-token-help" class="field-help">Verified privately with Discord. Saved tokens are never shown.</p>
+          <div class="setting-row"><div><label for="bot-enabled">Run this bot</label><p class="field-help">Enable Server Members Intent and Message Content Intent in its developer portal, and invite it to the server.</p></div><input type="checkbox" id="bot-enabled"></div>
+          <div class="form-footer"><button type="submit">Save bot</button><button type="button" id="cancel-bot" class="text-button">Cancel</button><p class="form-status" role="status"></p></div>
+        </form>
+      </section>
+
+      <section id="panel-personality" role="tabpanel" aria-labelledby="tab-personality" hidden>
+        <header class="page-heading"><p class="eyebrow">Conversation</p><h1 id="character-heading">Your character.</h1><p>Edit this character and how people get their attention.</p></header>
+        <form id="personality-form" class="settings-form">
+          <label for="personality">Character instructions</label>
+          <p class="field-help" id="personality-help">These define the character's voice, background and personality. The shared prompt keeps their knowledge and emotional boundaries grounded in that character. Access rules are enforced separately.</p>
+          <textarea id="personality" data-setting="personality" rows="15" maxlength="30000" required aria-describedby="personality-help" spellcheck="true"></textarea>
+          <div class="setting-row"><div><label for="public-chat">Reply to server members</label><p class="field-help">People can mention me or reply to one of my messages. DMs stay owner-only.</p></div><input type="checkbox" id="public-chat" data-setting="public_chat"></div>
+          <div class="setting-row"><div><label for="server-paused">Pause server replies</label><p class="field-help">Keeps the bot connected so /resume still works. Owner DMs remain available.</p></div><input type="checkbox" id="server-paused" data-setting="server_paused"></div>
+          <div class="setting-row"><div><label for="name-trigger" id="name-trigger-label">Answer to its name</label><p class="field-help">The whole name triggers a reply, with or without a mention.</p></div><input type="checkbox" id="name-trigger" data-setting="name_trigger"></div>
+          <div class="setting-row"><div><label for="history-turns">Recent exchanges to remember</label><p class="field-help">Separate for each person and channel, within the conversation size limit. Lasting memories are managed in Memories.</p></div><input type="number" id="history-turns" data-setting="history_turns" min="0" max="200" required></div>
+          <label for="nicknames">Other names to answer to</label><textarea id="nicknames" data-setting="nicknames" data-type="lines" rows="2" aria-describedby="nicknames-help"></textarea><p id="nicknames-help" class="field-help">One name per line. Names inside Discord emoji do not trigger a reply.</p>
+          <div class="form-footer"><button type="submit">Save personality</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details class="reference"><summary>Saved characters and Markdown presets</summary>
+          <p class="field-help">The default uses the instructions above. A selected preset supplies its own persona, examples and username-specific context.</p>
+          <p id="character-active" class="field-help"></p><ul id="character-list" class="entity-list"></ul>
+          <button type="button" id="new-character" class="secondary small">Add character</button>
+          <form id="character-editor" class="extra-form inline-editor" hidden>
+            <h3>Character preset</h3><label for="character-name">Name</label><input id="character-name" name="name" maxlength="50" required>
+            <label for="character-provider">Preferred provider</label><select id="character-provider" name="provider" data-choices="providers"><option value="">Use the normal provider order</option></select>
+            <label for="character-markdown">Character Markdown</label><textarea id="character-markdown" name="markdown" rows="12" maxlength="60000" required spellcheck="true"></textarea>
+            <p class="field-help">Use ‘## System Persona’, ‘## Example Dialogue’ and ‘## User Context’. Under User Context, ‘### username’ applies only to that exact username. Other sections stay out of the prompt.</p>
+            <label for="character-preview-user">Username for preview</label><input id="character-preview-user" maxlength="100">
+            <div class="form-footer"><button type="submit">Save character</button><button type="button" id="preview-character" class="secondary">Preview sections</button><button type="button" data-cancel="character-editor" class="text-button">Cancel</button><p class="form-status" role="status"></p></div>
+            <pre id="character-preview" class="output" hidden></pre>
+          </form>
+        </details>
+        <details class="reference"><summary>Reply format and additional prompts</summary>
+          <form id="reply-form" class="settings-form">
+            <div class="setting-row"><label for="single-user-mode">Handle one request at a time for this bot</label><input id="single-user-mode" type="checkbox" data-setting="single_user_mode"></div>
+            <div class="setting-row"><label for="split-replies">Send separate paragraphs as separate replies</label><input id="split-replies" type="checkbox" data-setting="split_replies"></div>
+            <div class="setting-row"><label for="split-limit">Maximum separate replies</label><input id="split-limit" type="number" min="1" max="10" data-setting="split_max" required></div>
+            <div class="setting-row"><label for="mention-users">Allow pings to participating people</label><input id="mention-users" type="checkbox" data-setting="mention_users"></div>
+            <div class="setting-row"><label for="mention-bots">Allow pings to participating bots</label><input id="mention-bots" type="checkbox" data-setting="mention_bots"></div>
+            <div class="setting-row"><label for="mention-context">Mentioned profiles to include</label><input id="mention-context" type="number" min="0" max="30" data-setting="mention_context_max" required></div>
+            <label for="reply-context-format">Quoted-message format</label><select id="reply-context-format" data-setting="reply_context_style"><option value="neutral">Neutral, with the original speaker labelled</option><option value="legacy">Also include the older descriptive quote</option></select>
+            <div class="setting-row"><label for="time-passage">Include time-passage context</label><input id="time-passage" type="checkbox" data-setting="time_passage_context"></div>
+            <div class="setting-row"><div><label for="recent-context">Recent channel messages for context</label><p class="field-help">Keeps the current topic across people and bots for ordinary and automatic replies. Set to 0 to switch off.</p></div><input id="recent-context" type="number" min="0" max="200" data-setting="recent_context" required></div>
+            <label for="post-chatroom">Additional server-chat instructions</label><textarea id="post-chatroom" data-setting="post_prompts" data-subkey="chatroom" maxlength="8000" rows="3"></textarea>
+            <label for="post-reminder">Reminder delivery instructions</label><textarea id="post-reminder" data-setting="post_prompts" data-subkey="reminder" maxlength="8000" rows="3"></textarea>
+            <label for="post-followup">DM follow-up instructions</label><textarea id="post-followup" data-setting="post_prompts" data-subkey="dm_followup" maxlength="8000" rows="3"></textarea>
+            <label for="post-time">Time-passage instructions</label><textarea id="post-time" data-setting="post_prompts" data-subkey="time_passage" maxlength="8000" rows="3"></textarea>
+            <label for="post-polisher">Wording-polisher instructions</label><textarea id="post-polisher" data-setting="post_prompts" data-subkey="polisher" maxlength="8000" rows="3"></textarea>
+            <div class="form-footer"><button type="submit">Save reply options</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+        <details class="reference"><summary>General character prompt</summary><p class="field-help">Shared instructions for authentic character voices, limited knowledge and psychological boundaries. Each bot adds its own character, current context and available tools.</p><pre id="system-prompt"></pre></details>
+      </section>
+
+      <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
+        <header class="page-heading"><p class="eyebrow">Providers</p><h1>The right connections.</h1><p>Changes apply to the next request. Saved keys are never displayed.</p></header>
+        <form id="connections-form" class="settings-form">
+          <fieldset><legend>Conversation</legend>
+            <label for="ai-base-url">API base address</label><input type="url" id="ai-base-url" data-setting="ai_base_url" required spellcheck="false" aria-describedby="base-url-help">
+            <p id="base-url-help" class="field-help">For NanoGPT, this ends in /api/v1. Local connections may use HTTP.</p>
+            <label for="ai-key">Replacement API key</label><input type="password" id="ai-key" data-key="ai_api_key" autocomplete="new-password" maxlength="4096" aria-describedby="ai-key-help">
+            <p id="ai-key-help" class="field-help">Leave blank to keep the saved key.</p>
+            <label for="ai-model">Main model</label><input id="ai-model" data-setting="ai_model" maxlength="150" required spellcheck="false" aria-describedby="ai-model-help">
+            <p id="ai-model-help" class="field-help">Tried first for every reply.</p>
+            <label>Fallback models and reasoning</label>
+            <div id="ai-fallback-list" class="fallback-list" aria-describedby="ai-fallbacks-help"></div>
+            <p id="ai-fallback-empty" class="field-help">No fallback models saved.</p>
+            <button type="button" id="add-ai-fallback" class="secondary small">Add fallback</button>
+            <p id="ai-fallbacks-help" class="field-help">If the main model fails or times out, these are tried from top to bottom. They use the address and key above. Each can have its own reasoning effort, or use the main model's. Up to ten.</p>
+            <label for="ai-effort">Main model reasoning effort</label><select id="ai-effort" data-setting="ai_reasoning_effort" data-nullable="true" aria-describedby="ai-effort-help"><option value="">Provider default</option><option>none</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select>
+            <p id="ai-effort-help" class="field-help">How long the main model thinks before replying. Higher is slower and costs more. Fallbacks can override this individually above. Models without reasoning ignore it or reject it.</p>
+            <label for="ai-prefill">Prefill</label><textarea id="ai-prefill" data-setting="ai_prefill" maxlength="4000" rows="3" aria-describedby="ai-prefill-help"></textarea>
+            <p id="ai-prefill-help" class="field-help">Text the reply is forced to start with. Models that refuse prefills, such as current Claude models, are retried without it. The prefill itself is never posted.</p>
+            <div class="setting-row"><div><label for="vision-enabled">This model can read images</label><p class="field-help">Sends labelled pictures from the current message and its reply. Turn this on for a vision-capable model.</p></div><input type="checkbox" id="vision-enabled" data-setting="vision_enabled"></div>
+            <div class="setting-row"><div><label for="vision-profiles">Include profile pictures</label><p class="field-help">Includes the speaker, mentioned people and this bot. Usernames and server nicknames are always included.</p></div><input type="checkbox" id="vision-profiles" data-setting="vision_profiles"></div>
+            <div class="field-pair"><div><label for="vision-detail">Image detail</label><select id="vision-detail" data-setting="vision_detail"><option value="auto">Automatic</option><option value="low">Low</option><option value="high">High</option></select></div><div><label for="vision-max-images">Images per request</label><input type="number" id="vision-max-images" data-setting="vision_max_images" min="1" max="10" required></div></div>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Default image provider</legend>
+            <label for="image-base-url">API base address</label><input type="url" id="image-base-url" data-setting="image_base_url" spellcheck="false" aria-describedby="image-url-help">
+            <p id="image-url-help" class="field-help">Leave blank to use the conversation address above. Any OpenAI-compatible image API works.</p>
+            <div class="field-pair"><div><label for="image-family">API format</label><select id="image-family" data-setting="image_family"><option value="openai_images">OpenAI-compatible Images</option><option value="responses">OpenAI Responses with image tool</option><option value="gemini">Google Gemini</option></select></div><div><label for="image-model">Image model</label><input id="image-model" data-setting="image_model" maxlength="150" required spellcheck="false"></div></div>
+            <label for="image-coordinator">Coordinator model, Responses format only</label><input id="image-coordinator" data-setting="image_coordinator_model" maxlength="150" required spellcheck="false">
+            <label for="image-key">Replacement image API key</label><input type="password" id="image-key" data-key="image_api_key" autocomplete="new-password" maxlength="4096" aria-describedby="image-key-help">
+            <p id="image-key-help" class="field-help">Leave blank to keep the saved key. Without one, the conversation key is used.</p>
+            <details class="reference"><summary>Daily-quota fallback keys</summary>
+              <p id="image-fallback-help" class="field-help">Keep up to three fallback keys after the primary. Blank fields keep the saved list; entering keys replaces the whole fallback list. Only a confirmed daily-quota rejection tries the next key.</p>
+              <label for="image-fallback-1">Fallback key 1</label><input type="password" id="image-fallback-1" data-key-item="image_fallback_keys" autocomplete="new-password" maxlength="4096">
+              <label for="image-fallback-2">Fallback key 2</label><input type="password" id="image-fallback-2" data-key-item="image_fallback_keys" autocomplete="new-password" maxlength="4096">
+              <label for="image-fallback-3">Fallback key 3</label><input type="password" id="image-fallback-3" data-key-item="image_fallback_keys" autocomplete="new-password" maxlength="4096">
+              <div class="setting-row"><label for="clear-image-fallbacks">Clear saved fallback keys on save</label><input type="checkbox" id="clear-image-fallbacks"></div>
+            </details>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Brave web search</legend>
+            <label for="brave-key">Replacement Brave API key</label><input type="password" id="brave-key" data-key="brave_api_key" autocomplete="new-password" maxlength="4096" aria-describedby="brave-key-help">
+            <p id="brave-key-help" class="field-help">Leave blank to keep the saved key.</p>
+          </fieldset>
+          <div class="form-footer"><button type="submit">Save connections</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details class="reference"><summary>Providers at a different address, and the order to try</summary>
+          <p class="field-help">Only needed for a model that lives somewhere other than the address above, or needs its own key or settings. Add it here, then place it in the order below. A character can also prefer one.</p>
+          <ul id="provider-list" class="entity-list"></ul><button type="button" id="new-provider" class="secondary small">Add provider</button>
+          <form id="provider-editor" class="extra-form inline-editor" hidden>
+            <h3>Conversation provider</h3>
+            <div class="field-pair"><div><label for="provider-id">Profile ID</label><input id="provider-id" name="id" pattern="[A-Za-z0-9_-]{1,50}" required></div><div><label for="provider-name">Display name</label><input id="provider-name" name="name" maxlength="60" required></div></div>
+            <label for="provider-family">API format</label><select id="provider-family" name="family"><option value="openai_chat">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic">Anthropic Messages</option><option value="gemini">Google Gemini</option></select>
+            <label for="provider-url">Base address</label><input id="provider-url" name="base_url" type="url" required>
+            <label for="provider-model">Model</label><input id="provider-model" name="model" maxlength="150" required>
+            <label for="provider-key">Replacement API key</label><input id="provider-key" name="api_key" type="password" autocomplete="new-password" maxlength="4096"><p id="provider-key-note" class="field-help">Leave blank to keep a saved key.</p>
+            <div class="setting-row"><label for="provider-vision">This provider can read images</label><input id="provider-vision" name="vision" type="checkbox"></div>
+            <div class="setting-row"><label for="provider-keyless">This connection needs no API key</label><input id="provider-keyless" name="local_keyless" type="checkbox"></div>
+            <details><summary>Compatibility, reasoning and request options</summary>
+              <div class="setting-row"><label for="provider-version">Append /v1, or /v1beta for Gemini</label><input id="provider-version" name="append_version" type="checkbox"></div>
+              <div class="field-pair"><div><label for="provider-timeout">Timeout in seconds</label><input id="provider-timeout" name="timeout" type="number" min="5" max="360" required></div><div><label for="provider-output">Maximum output tokens</label><input id="provider-output" name="max_tokens" type="number" min="256" max="65536" required></div></div>
+              <p class="field-help">Tokens are the small text units a provider counts. Limits and reasoning choices depend on the model.</p>
+              <div class="field-pair"><div><label for="provider-temperature">Temperature, optional</label><input id="provider-temperature" name="temperature" type="number" min="0" max="2" step="0.05" data-nullable="true"></div><div><label for="provider-effort">Reasoning effort</label><select id="provider-effort" name="reasoning_effort" data-nullable="true"><option value="">Provider default</option><option>none</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></div>
+              <label for="provider-prefill">Prefill, optional</label><textarea id="provider-prefill" name="prefill" maxlength="4000" rows="3"></textarea><p class="field-help">Text the reply is forced to start with. Models that refuse prefills are retried without it.</p>
+              <label for="provider-thinking">Thinking budget, zero for default</label><input id="provider-thinking" name="thinking_budget" type="number" min="0" max="64000" required>
+              <label for="provider-extra">Extra request fields, JSON</label><textarea id="provider-extra" name="extra_body" data-type="json" rows="4" spellcheck="false"></textarea>
+              <label for="provider-include">Fields to merge, YAML</label><textarea id="provider-include" name="include_body_yaml" rows="4" spellcheck="false"></textarea>
+              <label for="provider-exclude">Fields to remove, YAML</label><textarea id="provider-exclude" name="exclude_body_yaml" rows="3" spellcheck="false"></textarea>
+              <label for="provider-headers">Replacement headers, JSON</label><textarea id="provider-headers" name="headers" data-type="json" data-optional="true" rows="3" spellcheck="false" autocomplete="off"></textarea><p id="provider-headers-note" class="field-help">Saved header values stay private. Leave blank to keep them; {} clears them.</p>
+            </details>
+            <div class="form-footer"><button type="submit">Save provider</button><button type="button" data-cancel="provider-editor" class="text-button">Cancel</button><p class="form-status" role="status"></p></div>
+          </form>
+          <form id="fallback-form" class="settings-form inline-editor">
+            <h3>Order to try</h3><ol id="provider-order-list" class="entity-list"></ol><input id="provider-order" type="hidden" aria-label="Saved provider order" data-setting="provider_order" data-type="json">
+            <label for="provider-order-add">Provider to add</label><div class="inline-controls"><select id="provider-order-add" data-choices="providers"></select><button type="button" id="add-provider-order" class="secondary">Add to order</button></div>
+            <div class="setting-row"><label for="polisher-enabled">Polish wording after ordinary chat replies</label><input id="polisher-enabled" type="checkbox" data-setting="polisher_enabled"></div>
+            <p class="field-help">Makes an extra model request. Action reports are kept intact, and a failed polish keeps the original reply.</p>
+            <label for="polisher-provider">Polisher provider</label><select id="polisher-provider" data-setting="polisher_provider" data-choices="providers"><option value="">Use the normal order</option></select>
+            <label for="polisher-output">Polisher output-token limit</label><input id="polisher-output" type="number" min="256" max="16384" data-setting="polisher_max_tokens" required>
+            <div class="form-footer"><button type="submit">Save provider order</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+      </section>
+
+      <section id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" hidden>
+        <header class="page-heading"><p class="eyebrow">What I can do</p><h1>Put me to work.</h1><p>Expressions for both bot types, practical tools for assistants.</p></header>
+        <form id="tools-form" class="settings-form">
+          <fieldset><legend>Member pings</legend>
+            <div class="setting-row"><div><label for="member-pings">Ping people when explicitly asked</label><p class="field-help">Both bot types can resolve real usernames and nicknames, then ping individual people in this channel. No role or everyone pings.</p></div><input id="member-pings" type="checkbox" data-setting="member_pings"></div>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Personal role colours</legend>
+            <div class="setting-row"><div><label for="personal-colours">Let members change their own colour</label><p class="field-help">Creates a permission-free personal role when needed. Shared and staff roles keep their colours; other moderation remains owner-only.</p></div><input id="personal-colours" type="checkbox" data-setting="personal_colours"></div>
+          </fieldset>
+          <fieldset><legend>Emojis, reactions and stickers</legend>
+            <div class="setting-row"><div><label for="expressions-enabled">Use server expressions</label><p class="field-help">Both bot types can use existing emojis, react to messages and send stickers.</p></div><input id="expressions-enabled" type="checkbox" data-setting="expressions_enabled"></div>
+            <p class="field-help">Each reply can add up to two reactions and one sticker. Names and IDs come from the real server list below.</p>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Add expressions on request</legend>
+            <div class="setting-row"><label for="expression-uploads">Let this assistant add emojis and stickers</label><input id="expression-uploads" type="checkbox" data-setting="expression_uploads"></div>
+            <div class="setting-row"><div><label for="public-expression-uploads">Let server members request additions</label><p class="field-help">Requires an explicit request and an attached, linked or visibly referenced image. Other moderation remains owner-only.</p></div><input id="public-expression-uploads" type="checkbox" data-setting="public_expression_uploads"></div>
+            <div class="setting-row"><label for="expression-cooldown">Seconds between a person's uploads</label><input id="expression-cooldown" type="number" min="0" max="3600" data-setting="expression_cooldown" required></div>
+            <div class="setting-row"><label for="expression-per-user">Upload attempts per person in 24 hours</label><input id="expression-per-user" type="number" min="1" max="100" data-setting="expression_uploads_per_user" required></div>
+            <div class="setting-row"><label for="expression-per-day">Total upload attempts in 24 hours</label><input id="expression-per-day" type="number" min="1" max="500" data-setting="expression_uploads_per_day" required></div>
+            <p class="field-help">Counts are shared across accounts. Images are resized for Discord; animation is preserved within its limits. Existing expressions are never replaced.</p>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Pictures</legend>
+            <label for="image-provider">Preferred image provider</label><select id="image-provider" data-setting="image_provider" data-choices="images"></select>
+            <div class="setting-row"><label for="images-enabled">Generate pictures on request</label><input type="checkbox" id="images-enabled" data-setting="images_enabled"></div>
+            <div class="setting-row"><div><label for="public-images">Let server members request pictures</label><p class="field-help">Uses the chosen image connection. Server chat must also be enabled in Personality.</p></div><input type="checkbox" id="public-images" data-setting="public_images"></div>
+            <div class="field-pair"><div><label for="image-size">Default shape</label><select id="image-size" data-setting="image_size"><option value="1024x1024">Square · 1024 × 1024</option><option value="1024x1536">Portrait · 1024 × 1536</option><option value="1536x1024">Landscape · 1536 × 1024</option></select></div><div><label for="image-quality">Quality</label><select id="image-quality" data-setting="image_quality"><option value="auto">Automatic</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select></div></div>
+            <label for="image-style">House picture style, optional</label><textarea id="image-style" data-setting="image_style" rows="2" maxlength="300" aria-describedby="image-style-help"></textarea><p id="image-style-help" class="field-help">Added to every picture prompt unless someone asks for a different style. Leave blank for none.</p>
+            <p class="field-help">No per-person or daily limits. One generation at a time; busy requests and confirmed rate limits are saved and retried automatically. Interrupted paid requests are not repeated.</p>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Brave web search</legend>
+            <div class="setting-row"><label for="search-enabled">Search the web and read links on request</label><input type="checkbox" id="search-enabled" data-setting="search_enabled"></div>
+            <div class="setting-row"><div><label for="public-search">Let server members search and read links</label><p class="field-help">Web and image searches use your Brave key; reading public pages needs no key. Posting found images follows the picture permissions. Server chat must also be enabled.</p></div><input type="checkbox" id="public-search" data-setting="public_search"></div>
+            <p class="field-help">Successful searches may be reused for five minutes. Search excerpts are not full-page reads.</p>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Host health</legend>
+            <div class="setting-row"><div><label for="host-status-enabled">Read machine health and service status</label><p class="field-help">Only you can request this. It checks the machine without changing it.</p></div><input type="checkbox" id="host-status-enabled" data-setting="host_status_enabled"></div>
+            <label for="host-services">Services to check</label><textarea id="host-services" data-setting="host_services" data-type="lines" rows="3" spellcheck="false" aria-describedby="host-services-help"></textarea>
+            <p id="host-services-help" class="field-help">One systemd unit per line, such as caddy.service. Leave empty to report only memory, disk, uptime and network.</p>
+          </fieldset>
+          <div class="form-footer"><button type="submit">Save tools</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details id="expression-catalog" class="reference"><summary>Server emojis and stickers</summary>
+          <label for="expression-search">Search server expressions</label><div class="inline-controls"><input id="expression-search" type="search" maxlength="100" autocomplete="off"><button type="button" id="refresh-expressions" class="secondary">Refresh list</button></div>
+          <p id="expression-status" class="field-help" role="status"></p><ul id="expression-list" class="expression-list"></ul>
+        </details>
+        <details class="reference" data-assistant-only><summary>Additional image providers</summary>
+          <p class="field-help">The default image provider uses the connection set in Connections. Add named OpenAI-compatible, Responses or Google Gemini image providers here. For Gemini, the quality field sets resolution: 1K, 2K or 4K. A paid failure never automatically retries with another provider.</p>
+          <ul id="image-profile-list" class="entity-list"></ul><button type="button" id="new-image-profile" class="secondary small">Add image provider</button>
+          <form id="image-profile-editor" class="extra-form inline-editor" hidden>
+            <h3>Image provider</h3><div class="field-pair"><div><label for="image-profile-id">Profile ID</label><input id="image-profile-id" name="id" pattern="[A-Za-z0-9_-]{1,50}" required></div><div><label for="image-profile-name">Display name</label><input id="image-profile-name" name="name" maxlength="60" required></div></div>
+            <label for="image-profile-family">API format</label><select id="image-profile-family" name="family"><option value="openai_images">OpenAI-compatible Images</option><option value="responses">OpenAI Responses with image tool</option><option value="gemini">Google Gemini (Nano Banana)</option></select>
+            <label for="image-profile-url">Base address</label><input id="image-profile-url" name="base_url" type="url" required>
+            <label for="image-profile-model">Image model</label><input id="image-profile-model" name="model" required>
+            <label for="image-profile-key">Replacement API key</label><input id="image-profile-key" name="api_key" type="password" autocomplete="new-password" maxlength="4096"><p id="image-profile-key-note" class="field-help">Leave blank to keep a saved key.</p>
+            <div class="setting-row"><label for="image-profile-keyless">This connection needs no key</label><input id="image-profile-keyless" name="local_keyless" type="checkbox"></div>
+            <details><summary>Image and request options</summary>
+              <label for="image-profile-coordinator">Coordinator model, Responses format only</label><input id="image-profile-coordinator" name="coordinator_model" required>
+              <div class="field-pair"><div><label for="image-profile-size">Size</label><input id="image-profile-size" name="size" required></div><div><label for="image-profile-quality">Quality</label><input id="image-profile-quality" name="quality" required></div></div>
+              <label for="image-profile-style">Style, optional</label><input id="image-profile-style" name="style">
+              <div class="field-pair"><div><label for="image-profile-format">Output format</label><select id="image-profile-format" name="output_format"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></div><div><label for="image-profile-background">Background</label><select id="image-profile-background" name="background"><option value="">Provider default</option><option>auto</option><option>transparent</option><option>opaque</option></select></div></div>
+              <div class="field-pair"><div><label for="image-profile-moderation">Provider moderation</label><select id="image-profile-moderation" name="moderation"><option value="">Provider default</option><option>auto</option><option>low</option></select></div><div><label for="image-profile-response">Response format</label><select id="image-profile-response" name="response_format"><option value="">Provider default</option><option value="b64_json">Encoded image</option><option value="url">Download URL</option></select></div></div>
+              <label for="image-profile-timeout">Timeout in seconds</label><input id="image-profile-timeout" name="timeout" type="number" min="10" max="600" required>
+              <label for="image-profile-extra">Extra request fields, JSON</label><textarea id="image-profile-extra" name="extra_body" data-type="json" rows="4" spellcheck="false"></textarea>
+            </details>
+            <div class="form-footer"><button type="submit">Save image provider</button><button type="button" data-cancel="image-profile-editor" class="text-button">Cancel</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+      </section>
+
+      <section id="panel-automation" role="tabpanel" aria-labelledby="tab-automation" hidden>
+        <header class="page-heading"><p class="eyebrow">When I join in</p><h1>On my own initiative.</h1><p>Choose the conversations first. Random messages and DM follow-ups start switched off.</p></header>
+        <p class="notice">Use /pause in Discord to pause this bot's server replies, and /resume to bring them back. The bot stays connected.</p>
+        <form id="spontaneous-form" class="settings-form">
+          <fieldset><legend>Random conversation starters</legend>
+            <div class="setting-row"><label for="spontaneous-enabled">Start conversations without a new message</label><input id="spontaneous-enabled" type="checkbox" data-setting="spontaneous_enabled"></div>
+            <label for="spontaneous-channels">Channels for random messages</label><select id="spontaneous-channels" multiple size="4" data-setting="spontaneous_channels" data-choices="channels"></select><p class="field-help">Select the channels this bot may use. It waits a random interval before the first message too.</p>
+            <div class="field-pair"><div><label for="spontaneous-min">Shortest interval, minutes</label><input id="spontaneous-min" type="number" min="1" max="10080" data-setting="spontaneous_min_minutes" required></div><div><label for="spontaneous-max">Longest interval, minutes</label><input id="spontaneous-max" type="number" min="1" max="10080" data-setting="spontaneous_max_minutes" required></div></div>
+            <label for="spontaneous-silence">Wait for this many quiet minutes</label><input id="spontaneous-silence" type="number" min="0" max="1440" data-setting="spontaneous_silence_minutes" required>
+            <label for="spontaneous-prompt">What to start a conversation about</label><textarea id="spontaneous-prompt" data-setting="spontaneous_prompt" rows="3" maxlength="2000" required></textarea>
+          </fieldset><div class="form-footer"><button type="submit">Save random speech</button><p class="form-status" role="status"></p></div>
+        </form>
+        <form id="wordle-form" class="settings-form">
+          <fieldset><legend>Daily Wordle</legend>
+            <div class="setting-row"><label for="wordle-enabled">Play today's Wordle in the chosen channel</label><input id="wordle-enabled" type="checkbox" data-setting="wordle_enabled"></div>
+            <label for="wordle-channel">Wordle channel</label><select id="wordle-channel" data-setting="wordle_channel" data-choices="channels"><option value="">No channel chosen</option></select>
+            <label for="wordle-time">Daily time, 24-hour (this bot's timezone)</label><input id="wordle-time" type="time" data-setting="wordle_time" required><p class="field-help">The bot fetches the real daily answer, plays it with its own model and posts one grid with a short line. Stagger the bots a few minutes apart so they can read each other's results. /wordle plays today's game now.</p>
+          </fieldset><div class="form-footer"><button type="submit">Save Wordle</button><p class="form-status" role="status"></p></div>
+        </form>
+        <form id="releases-form" class="settings-form">
+          <fieldset><legend>GitHub releases</legend>
+            <div class="setting-row"><label for="releases-enabled">Announce new published releases</label><input id="releases-enabled" type="checkbox" data-setting="releases_enabled"></div>
+            <label for="releases-channel">Release channel</label><select id="releases-channel" data-setting="releases_channel" data-choices="channels"><option value="">No channel chosen</option></select>
+            <label for="releases-repositories">Repositories to watch</label><textarea id="releases-repositories" data-setting="releases_repositories" data-type="lines" rows="3" spellcheck="false" placeholder="owner/name" aria-describedby="releases-help"></textarea>
+            <p id="releases-help" class="field-help">One public GitHub repository per line, written as owner/name. Checked every five minutes; posts release notes and a link, including labelled pre-releases. The first check records existing releases without posting them. Enable this on just one bot for each channel.</p>
+          </fieldset><div class="form-footer"><button type="submit">Save release announcements</button><p class="form-status" role="status"></p></div>
+        </form>
+        <form id="news-form" class="settings-form">
+          <fieldset><legend>News roundups</legend>
+            <div class="setting-row"><label for="news-enabled">Post news roundups from feeds</label><input id="news-enabled" type="checkbox" data-setting="news_enabled"></div>
+            <label for="news-channel">News channel</label><select id="news-channel" data-setting="news_channel" data-choices="channels"><option value="">No channel chosen</option></select>
+            <label for="news-hours">Check every this many hours</label><input id="news-hours" type="number" min="1" max="48" data-setting="news_hours" required>
+            <label for="news-feeds">Feeds to read</label><textarea id="news-feeds" data-setting="news_feeds" data-type="lines" rows="4" spellcheck="false" placeholder="https://example.com/feed.xml" aria-describedby="news-feeds-help"></textarea>
+            <p id="news-feeds-help" class="field-help">One RSS or Atom feed address per line, up to thirty.</p>
+            <label for="news-topic">What counts as news</label><textarea id="news-topic" data-setting="news_topic" rows="3" maxlength="2000" required aria-describedby="news-topic-help"></textarea>
+            <p id="news-topic-help" class="field-help">A short model check keeps only new stories that match this, then the bot posts a roundup in its own character with numbered source links. Nothing is posted when nothing matches. Enable this on just one bot for each channel.</p>
+          </fieldset><div class="form-footer"><button type="submit">Save news roundups</button><p class="form-status" role="status"></p></div>
+        </form>
+        <form id="quiet-form" class="settings-form">
+          <fieldset><legend>Quiet channels</legend>
+            <label for="quiet-channels">Never reply at random in</label><select id="quiet-channels" multiple size="4" data-setting="quiet_channels" data-choices="channels" aria-describedby="quiet-help"></select>
+            <p id="quiet-help" class="field-help">Chance-based replies skip these channels. Mentions and direct replies still work.</p>
+          </fieldset><div class="form-footer"><button type="submit">Save quiet channels</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details class="reference"><summary>Replies to ordinary channel messages</summary>
+          <p class="field-help">These are chance-based replies to a new message. Explicit mentions and direct replies do not wait for this cooldown. /autonomous sets the same controls from Discord.</p>
+          <ul id="channel-rule-list" class="entity-list"></ul>
+          <form id="channel-rule-editor" class="extra-form inline-editor">
+            <label for="rule-channel">Channel</label><select id="rule-channel" name="channel" data-choices="channels" required></select>
+            <div class="setting-row"><label for="rule-enabled">Reply without being addressed</label><input id="rule-enabled" name="enabled" type="checkbox"></div>
+            <div class="field-pair"><div><label for="rule-chance">Reply chance, percent</label><input id="rule-chance" name="chance" type="number" min="1" max="50" value="10" required></div><div><label for="rule-cooldown">Cooldown in seconds</label><input id="rule-cooldown" name="cooldown" type="number" min="0" max="86400" value="120" required></div></div>
+            <div class="setting-row"><label for="rule-bots">Allow managed bots to trigger replies here</label><input id="rule-bots" name="bot_triggers" type="checkbox" checked></div>
+            <div class="setting-row"><label for="rule-names">Answer to names here</label><input id="rule-names" name="nickname_trigger" type="checkbox" checked></div>
+            <div class="form-footer"><button type="submit">Save channel rule</button><button type="button" data-reset="channel-rule-editor" class="text-button">Clear edit</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+        <details class="reference"><summary>Conversations between bots</summary>
+          <p id="bot-talk-status" class="field-help"></p><button id="toggle-bot-talk" type="button" class="secondary small">Stop all bot conversations</button>
+          <form id="bot-talk-form" class="settings-form inline-editor">
+            <div class="setting-row"><label for="bot-conversations">Let this bot answer other managed bots</label><input id="bot-conversations" type="checkbox" data-setting="bot_conversations"></div>
+            <p class="field-help">Each eligible bot has a 10% chance to answer another managed bot. Only one bot reply is allowed, then the exchange ends. Other bots keep their own identities and receive no action tools. /stop stops all bot conversations.</p>
+            <label for="reply-stagger">Delay before automatic replies, seconds</label><input id="reply-stagger" type="number" min="0" max="30" data-setting="reply_stagger" required>
+            <div class="form-footer"><button type="submit">Save bot conversations</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+        <details class="reference"><summary>Access and quiet hours</summary>
+          <p class="field-help">Requests addressed to a bot during quiet hours wait in a saved queue. Busy requests and temporary service failures also retry automatically. Queued work survives restarts; editing or deleting the original message cancels it.</p>
+          <form id="access-form" class="settings-form">
+            <div class="setting-row"><label for="server-replies">Allow server replies</label><input id="server-replies" type="checkbox" data-setting="server_replies"></div>
+            <div class="setting-row"><label for="dm-replies">Allow owner DMs</label><input id="dm-replies" type="checkbox" data-setting="dm_replies"></div>
+            <div class="setting-row"><label for="channel-whitelist-enabled">Only use selected channels</label><input id="channel-whitelist-enabled" type="checkbox" data-setting="channel_whitelist_enabled"></div>
+            <label for="channel-whitelist">Allowed channels</label><select id="channel-whitelist" multiple size="4" data-setting="channel_whitelist" data-choices="channels"></select>
+            <label for="channel-blacklist">Blocked channels</label><select id="channel-blacklist" multiple size="4" data-setting="channel_blacklist" data-choices="channels"></select>
+            <label for="ignored-users">Ignored people, one Discord user ID per line</label><textarea id="ignored-users" data-setting="ignored_users" data-type="lines" rows="3"></textarea>
+            <label for="dm-blacklist">Blocked DMs, one Discord user ID per line</label><textarea id="dm-blacklist" data-setting="dm_blacklist" data-type="lines" rows="2"></textarea>
+            <label for="bot-timezone">Default timezone</label><input id="bot-timezone" data-setting="timezone" required placeholder="Europe/London"><p class="field-help">Use an IANA timezone name. Personal overrides take priority for reminders.</p>
+            <div class="form-footer"><button type="submit">Save access and timezone</button><p class="form-status" role="status"></p></div>
+          </form>
+          <div class="section-heading"><h3>Quiet hours</h3></div><ul id="schedule-list" class="entity-list"></ul>
+          <form id="schedule-editor" class="extra-form inline-editor">
+            <fieldset class="weekdays"><legend>Days this quiet period starts</legend><label><input type="checkbox" name="days" value="0">Mon</label><label><input type="checkbox" name="days" value="1">Tue</label><label><input type="checkbox" name="days" value="2">Wed</label><label><input type="checkbox" name="days" value="3">Thu</label><label><input type="checkbox" name="days" value="4">Fri</label><label><input type="checkbox" name="days" value="5">Sat</label><label><input type="checkbox" name="days" value="6">Sun</label></fieldset>
+            <div class="field-pair"><div><label for="schedule-start">Start</label><input id="schedule-start" name="start" type="time" required></div><div><label for="schedule-end">End</label><input id="schedule-end" name="end" type="time" required></div></div><p class="field-help">Uses the bot's saved timezone. An end before the start continues into the following day.</p>
+            <div class="form-footer"><button type="submit">Add quiet period</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+        <details class="reference"><summary>Owner DM follow-ups</summary>
+          <form id="followup-form" class="settings-form">
+            <div class="setting-row"><label for="dm-followups-enabled">Follow up when an owner DM goes quiet</label><input id="dm-followups-enabled" type="checkbox" data-setting="dm_followups_enabled"></div>
+            <div class="field-pair"><div><label for="followup-after">Minutes of silence</label><input id="followup-after" type="number" min="1" max="10080" data-setting="dm_followup_after_minutes" required></div><div><label for="followup-cooldown">Hours between follow-ups</label><input id="followup-cooldown" type="number" min="1" max="720" data-setting="dm_followup_cooldown_hours" required></div></div>
+            <label for="followup-max">Maximum until you speak again</label><input id="followup-max" type="number" min="1" max="10" data-setting="dm_followup_max" required>
+            <fieldset data-assistant-only><legend>Follow-up pictures</legend>
+            <div class="setting-row"><label for="followup-images">Sometimes generate a follow-up picture</label><input id="followup-images" type="checkbox" data-setting="dm_followup_images"></div>
+            <p class="field-help">Uses a paid image request and the shared picture limits. Failed attempts are not retried automatically.</p>
+            <div class="field-pair"><div><label for="followup-image-chance">Picture chance, percent</label><input id="followup-image-chance" type="number" min="0" max="100" data-setting="dm_followup_image_chance" required></div><div><label for="followup-caption-chance">Caption chance, percent</label><input id="followup-caption-chance" type="number" min="0" max="100" data-setting="dm_followup_caption_chance" required></div></div>
+            <label for="followup-image-provider">Follow-up image provider</label><select id="followup-image-provider" data-setting="dm_followup_image_provider" data-choices="images"><option value="">Use the preferred image provider</option></select>
+            <label for="followup-image-prompt">Picture instructions</label><textarea id="followup-image-prompt" data-setting="dm_followup_image_prompt" rows="3" maxlength="3000" required></textarea>
+            </fieldset>
+            <div class="form-footer"><button type="submit">Save DM follow-ups</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+      </section>
+
+      <section id="panel-reminders" role="tabpanel" aria-labelledby="tab-reminders" hidden>
+        <header class="page-heading"><p class="eyebrow">At the right time</p><h1>Leave it with me.</h1><p>Reminders survive restarts. Each belongs to its person and this bot.</p></header>
+        <p id="reminder-mode-note" class="field-help" hidden>Stored reminders are kept, but chatbot mode does not create or deliver them. Choose Assistant in Bots to use reminders.</p>
+        <form id="reminder-settings-form" class="settings-form compact" data-assistant-only><div class="setting-row"><label for="reminders-enabled">Allow reminders</label><input id="reminders-enabled" type="checkbox" data-setting="reminders_enabled"></div><div class="form-footer"><button type="submit" class="secondary">Save reminder setting</button><p class="form-status" role="status"></p></div></form>
+        <div class="section-heading"><h2>Scheduled messages</h2><button type="button" id="refresh-reminders" class="text-button">Refresh reminders</button></div><p id="reminder-notice" class="form-status" role="status"></p><ul id="reminder-list" class="entity-list"></ul>
+        <details class="reference" data-assistant-only><summary>Add a reminder</summary>
+          <form id="reminder-editor" class="extra-form">
+            <div class="field-pair"><div><label for="reminder-person">Person</label><select id="reminder-person" name="author_id" data-choices="people" required></select></div><div><label for="reminder-channel">Conversation</label><select id="reminder-channel" name="channel_id" data-choices="conversations" required></select></div></div>
+            <label for="reminder-delivery">Deliver to</label><select id="reminder-delivery" name="delivery"><option value="here">This conversation</option><option value="dm">Owner DM</option></select>
+            <label for="reminder-due">Date and time</label><input id="reminder-due" name="due_at" type="datetime-local" required><p id="reminder-zone-note" class="field-help">Uses the selected person's timezone, or this bot's default.</p>
+            <label for="reminder-message">What to remember</label><textarea id="reminder-message" name="message" rows="3" maxlength="1000" required></textarea>
+            <div class="form-footer"><button type="submit">Save reminder</button><p class="form-status" role="status"></p></div>
+          </form>
+        </details>
+        <details class="reference"><summary>Personal timezones</summary><ul id="timezone-list" class="entity-list"></ul>
+          <form id="timezone-editor" class="extra-form"><label for="timezone-person">Person</label><select id="timezone-person" name="author_id" data-choices="people" required></select><label for="personal-timezone">Timezone override</label><input id="personal-timezone" name="zone" placeholder="Asia/Manila"><p class="field-help">Leave blank to use this bot's default. People can also use /timezone in Discord.</p><div class="form-footer"><button type="submit">Save personal timezone</button><p class="form-status" role="status"></p></div></form>
+        </details>
+      </section>
+
+      <section id="panel-maintenance" role="tabpanel" aria-labelledby="tab-maintenance" hidden>
+        <header class="page-heading"><p class="eyebrow">Under your control</p><h1>Keep things in order.</h1><p>Selected-bot diagnostics and backups, plus programme-wide restart and updates.</p></header>
+        <p id="maintenance-notice" class="notice" role="status" hidden></p>
+        <div class="section-heading"><h2>Diagnostics</h2><button type="button" id="refresh-diagnostics" class="text-button">Refresh diagnostics</button></div><dl id="diagnostic-stats" class="plain-facts"></dl>
+        <form id="diagnostic-settings-form" class="settings-form">
+          <div class="setting-row"><label for="diagnostics-enabled">Save diagnostic context and request logs</label><input id="diagnostics-enabled" type="checkbox" data-setting="diagnostics_enabled"></div>
+          <div class="setting-row"><div><label for="raw-generation-logging">Also log full provider input and output</label><p class="field-help">Stores conversation text in this bot's private rotating log files. Off by default.</p></div><input id="raw-generation-logging" type="checkbox" data-setting="raw_generation_logging"></div>
+          <div class="form-footer"><button type="submit" class="secondary">Save diagnostics</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details class="reference"><summary>Request history and logs</summary><div class="table-scroll" tabindex="0" role="region" aria-label="Recent provider requests"><table><thead><tr><th>Time</th><th>Provider</th><th>Seconds</th><th>Input / output tokens</th><th>Result</th></tr></thead><tbody id="diagnostic-requests"></tbody></table></div><pre id="diagnostic-log" class="output">No log loaded.</pre><details><summary>Last saved provider context</summary><pre id="diagnostic-context" class="output"></pre></details></details>
+        <details class="reference"><summary>Preview the exact conversation context</summary>
+          <p class="field-help">Builds the current prompt, visible profile details and available tools without sending anything to a provider.</p>
+          <form id="context-editor" class="extra-form"><div class="field-pair"><div><label for="context-person">Person</label><select id="context-person" name="author_id" data-choices="people" required></select></div><div><label for="context-channel">Conversation</label><select id="context-channel" name="channel_id" data-choices="conversations" required></select></div></div><label for="context-message">Message to preview</label><textarea id="context-message" name="message" rows="3" maxlength="4000" required></textarea><div class="form-footer"><button type="submit">Preview context</button><p class="form-status" role="status"></p></div><pre id="context-output" class="output" hidden></pre></form>
+        </details>
+        <details class="reference"><summary>Import, export and advanced settings</summary>
+          <p class="field-help">Exports contain this bot's settings, characters, provider definitions, facts, lore, timezones and reminders. Keys, tokens and chat history are excluded. Imports merge the content and save a backup first.</p>
+          <a id="export-profile" class="download-link" href="api/export">Download bot profile</a>
+          <form id="import-editor" class="extra-form inline-editor"><label for="import-file">Bot profile JSON file</label><input id="import-file" type="file" accept=".json,application/json" required><div class="form-footer"><button type="submit">Validate import</button><button type="button" id="apply-import" class="secondary" disabled>Apply validated import</button><p class="form-status" role="status"></p></div><pre id="import-result" class="output" hidden></pre></form>
+          <details class="reference"><summary>Edit all non-secret settings as JSON</summary><form id="advanced-editor" class="extra-form"><label for="advanced-settings">Settings JSON</label><textarea id="advanced-settings" rows="18" spellcheck="false" required></textarea><div class="form-footer"><button type="submit">Save advanced settings</button><button type="button" id="reset-advanced" class="text-button">Discard edits</button><p class="form-status" role="status"></p></div></form></details>
+        </details>
+        <details class="reference"><summary>Reload, slash commands and programme restart</summary>
+          <p id="command-inventory" class="field-help"></p><div class="button-row"><button type="button" id="reload-settings" class="secondary">Reload this bot's saved settings</button><button type="button" id="sync-commands" class="secondary">Sync this bot's slash commands</button><button type="button" id="restart-programme" class="secondary">Restart all bots</button></div><p class="field-help">Restart waits for you to retry once active requests finish. Saved conversations and reminders are kept.</p>
+        </details>
+        <details class="reference"><summary>Programme updates and rollback</summary>
+          <p class="field-help">Upload a Hearthling release ZIP. Its file list, checksums, installed dependencies and runnable checks must pass before you can apply it. A failed startup returns to the previous release. This updates the whole programme.</p>
+          <dl id="release-status" class="plain-facts"></dl><a id="export-release" class="download-link" href="api/release">Download current programme release</a>
+          <form id="release-editor" class="extra-form inline-editor"><label for="release-file">Hearthling release ZIP</label><input id="release-file" type="file" accept=".zip,application/zip" required><div class="form-footer"><button type="submit">Check uploaded release</button><p class="form-status" role="status"></p></div></form>
+          <div class="button-row"><button type="button" id="apply-release" class="secondary" disabled>Apply checked release</button><button type="button" id="rollback-release" class="secondary" disabled>Restore previous release</button></div>
+        </details>
+      </section>
+
+      <section id="panel-memories" role="tabpanel" aria-labelledby="tab-memories" hidden>
+        <header class="page-heading"><p class="eyebrow">The things that stay</p><h1>I've been listening.</h1><p>Lasting facts follow each person across channels and bot accounts. Server-wide facts are available to everyone. Stored facts are unlimited; matching keywords bring relevant facts into the current chat.</p></header>
+        <form id="memory-settings-form" class="settings-form compact">
+          <div class="setting-row"><label for="memory-enabled">Use lasting memories</label><input type="checkbox" id="memory-enabled" data-setting="memory_enabled"></div>
+          <div class="setting-row"><div><label for="auto-memory">Remember useful facts naturally</label><p class="field-help">When off, I save only when someone explicitly asks me to remember.</p></div><input type="checkbox" id="auto-memory" data-setting="auto_memory"></div>
+          <div class="setting-row"><div><label for="memory-budget">Recalled memory budget (characters)</label><p class="field-help">Facts are stored without limit; at most this much matched text enters each reply. 0 recalls none of them without deleting anything.</p></div><input type="number" id="memory-budget" data-setting="memory_context_chars" min="0" max="20000" step="100"></div>
+          <div class="form-footer"><button type="submit" class="secondary">Save memory settings</button><p class="form-status" role="status"></p></div>
+        </form>
+        <div class="section-heading"><h2>Saved memories</h2><button type="button" id="new-memory" class="secondary small">Add memory</button></div>
+        <div class="memory-filters"><div><label for="memory-search">Search facts</label><input type="search" id="memory-search" placeholder="Tea, hobbies, preferences…"></div><div><label for="filter-person">Person</label><select id="filter-person"></select></div><div><label for="filter-channel">Learned in</label><select id="filter-channel"></select></div></div>
+        <p class="field-help">Forgetting also clears that person's saved recent context across channels and bots, removing old conversational copies.</p>
+        <p id="memory-notice" class="form-status" role="status"></p>
+        <ul id="memory-list" class="memory-list"></ul>
+        <p id="memory-empty" class="empty">No memories yet. Ask the bot to remember a preference in Discord, or add one here.</p>
+        <div class="button-row"><button type="button" id="memory-more" class="secondary small" hidden>Load more</button></div>
+        <form id="memory-editor" class="memory-editor" hidden>
+          <h2 id="memory-editor-title">Add a memory</h2>
+          <div class="field-pair"><div><label for="memory-person">Person</label><select id="memory-person" required></select></div><div><label for="memory-channel">Learned in</label><select id="memory-channel" required></select></div></div>
+          <div class="setting-row"><div><label for="memory-shared">Server-wide fact</label><p class="field-help">Personal facts follow this person across channels and bots. Server-wide facts are available to everyone, including appearances and traits of any member.</p></div><input type="checkbox" id="memory-shared"></div>
+          <label for="memory-fact">Fact to remember</label><textarea id="memory-fact" rows="3" maxlength="400" required placeholder="Takes tea without sugar."></textarea>
+          <label for="memory-keywords">Activation keywords</label><input id="memory-keywords" maxlength="400" placeholder="tea, sugar">
+          <p class="field-help">Comma-separated words or phrases, matched whole and case-insensitively. The fact enters a reply only when one appears in chat. Leave blank to generate them from the fact automatically.</p>
+          <div class="form-footer"><button type="submit">Save memory</button><button type="button" id="cancel-memory" class="text-button">Cancel</button><p class="form-status" role="status"></p></div>
+        </form>
+        <details class="reference"><summary>Clean up a conversation's memory and history</summary>
+          <form id="memory-scope-editor" class="extra-form"><div class="field-pair"><div><label for="cleanup-person">Person</label><select id="cleanup-person" name="author_id" data-choices="people" required></select></div><div><label for="cleanup-channel">Conversation</label><select id="cleanup-channel" name="channel_id" data-choices="conversations" required></select></div></div><div class="form-footer"><button type="submit">Merge exact duplicate facts</button><button type="button" id="clear-scope-history" class="secondary">Clear recent context only</button><p class="form-status" role="status"></p></div></form>
+        </details>
+        <details class="reference"><summary>Manual lore</summary><p class="field-help">Deliberately shared background facts, available to every account. Choose who may receive each entry.</p><ul id="lore-list" class="entity-list"></ul><button type="button" id="new-lore" class="secondary small">Add lore</button>
+          <form id="lore-editor" class="extra-form inline-editor" hidden><label for="lore-scope">Who receives this lore</label><select id="lore-scope" name="scope"><option value="server">People in this server</option><option value="global">Every bot, everywhere</option><option value="bot">This bot in every conversation</option><option value="user">One person</option></select><label for="lore-person">Person, for personal lore</label><select id="lore-person" data-choices="people"></select><label for="lore-channel">Limit to a conversation, optional</label><select id="lore-channel" name="channel_id" data-choices="conversations"><option value="">Every eligible conversation</option></select><label for="lore-text">Lore</label><textarea id="lore-text" name="text" rows="5" maxlength="4000" required></textarea><div class="form-footer"><button type="submit">Save lore</button><button type="button" data-cancel="lore-editor" class="text-button">Cancel</button><p class="form-status" role="status"></p></div></form>
+        </details>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

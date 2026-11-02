@@ -1,0 +1,5 @@
+import os
+
+os.environ.setdefault('HEARTHLING_APPLICATION_ID', '1000000000000000001')
+os.environ.setdefault('HEARTHLING_SERVER_ID', '1000000000000000002')
+os.environ.setdefault('HEARTHLING_OWNER_ID', '1000000000000000003')
