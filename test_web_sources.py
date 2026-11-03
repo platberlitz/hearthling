@@ -16,7 +16,8 @@ from images import PublicResolver
 from test_hearthling import ai_reply, expect_async_error, expect_error
 from test_bots import CREDENTIALS, fake_ai
 from test_features import GUEST_ID, http_session, request
-from web_sources import fetch_resource, page_content, picture_extension, public_url
+import web_sources
+from web_sources import fetch_resource, page_content, picture_extension, public_url, read_page, reddit_feed
 
 
 PAGE = b'''<!doctype html><html><head><title>Tea &amp; biscuits</title>
@@ -64,6 +65,83 @@ def tool_reply(action, **args):
     return NS(choices=[NS(message=ChatCompletionMessage(role='assistant', content=None, tool_calls=[
         ChatCompletionMessageFunctionToolCall(id='call_' + action, type='function',
             function={'name': 'feature_tool', 'arguments': json.dumps({'action': action, **args})})]))])
+
+
+REDDIT_FEED = b'''<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+<title>Tea thread : tea</title>
+<entry><author><name>/u/brewer</name></author><category term="tea" label="r/tea"/>
+<content type="html">&lt;div class="md"&gt;&lt;p&gt;Steep for three minutes.&lt;/p&gt;&lt;/div&gt; submitted by &lt;a href="https://www.reddit.com/user/brewer"&gt; /u/brewer &lt;/a&gt; &lt;span&gt;&lt;a href="https://example.org/guide"&gt;[link]&lt;/a&gt;&lt;/span&gt; &lt;span&gt;&lt;a href="https://www.reddit.com/r/tea/comments/abc12/tea/"&gt;[comments]&lt;/a&gt;&lt;/span&gt;</content>
+<id>t3_abc12</id><media:thumbnail url="https://external-preview.redd.it/tea.png"/>
+<link href="https://www.reddit.com/r/tea/comments/abc12/tea/"/><published>2026-10-23T20:30:51+00:00</published><title>Tea thread</title></entry>
+<entry><author><name>/u/sipper</name></author><content type="html">&lt;p&gt;Four minutes for black tea.&lt;/p&gt;</content>
+<id>t1_def34</id><link href="https://www.reddit.com/r/tea/comments/abc12/tea/def34/"/><updated>2026-10-23T21:00:00+00:00</updated></entry>
+</feed>'''
+
+READER_COPY = b'''Title: Blocked tea page
+
+URL Source: https://blocked.example.org/tea
+
+Markdown Content:
+Steep green tea for two minutes. [Guide](https://blocked.example.org/guide) ![Cup](https://blocked.example.org/cup.png) [Local](http://127.0.0.1/x)'''
+
+
+async def blocked_sites():
+    assert reddit_feed('https://www.reddit.com/r/tea/comments/abc12/tea/.json') == 'https://www.reddit.com/r/tea/comments/abc12/tea/.rss?limit=100'
+    assert reddit_feed('https://redd.it/abc12') == 'https://www.reddit.com/comments/abc12/.rss?limit=100'
+    assert reddit_feed('https://old.reddit.com/r/tea/top/?t=day') == 'https://www.reddit.com/r/tea/top/.rss?t=day'
+    assert reddit_feed('https://reddit.com/u/brewer') == 'https://www.reddit.com/user/brewer/.rss'
+    assert reddit_feed('https://www.reddit.com/gallery/abc12') == 'https://www.reddit.com/comments/abc12/.rss?limit=100'
+    assert reddit_feed('https://www.reddit.com/r/tea/s/AbCd') is None and reddit_feed('https://example.org/r/tea') is None
+
+    web_sources._cache.clear()
+    fetch = AsyncMock(return_value=resource(REDDIT_FEED, 'application/atom+xml'))
+    with patch('web_sources.fetch_resource', new=fetch):
+        page = await read_page('https://www.reddit.com/r/tea/comments/abc12/tea/')
+        again = await read_page('https://www.reddit.com/r/tea/comments/abc12/tea/', offset=10, max_chars=1000)
+    assert fetch.await_count == 1 and fetch.await_args.args == ('https://www.reddit.com/r/tea/comments/abc12/tea/.rss?limit=100',)
+    assert page['via'] == 'reddit_feed' and page['title'] == 'Tea thread : tea' and page['untrusted_content']
+    assert 'Post: Tea thread\nBy /u/brewer in r/tea (2026-10-23 20:30 UTC)' in page['text']
+    assert 'Steep for three minutes.' in page['text'] and 'submitted by' not in page['text']
+    assert 'Comment by /u/sipper (2026-10-23 21:00 UTC):\nFour minutes for black tea.' in page['text']
+    assert page['links'] == [{'url': 'https://example.org/guide', 'text': '[link]'}]
+    assert page['images'][0]['image_url'] == 'https://external-preview.redd.it/tea.png'
+    assert again['text'] == page['text'][10:] and again['offset'] == 10
+
+    web_sources._cache.clear()
+    limited = web_sources.FetchError('HTTP 429', 429, 20.0)
+    fetch = AsyncMock(side_effect=[limited, resource(REDDIT_FEED, 'application/atom+xml')])
+    with patch('web_sources.fetch_resource', new=fetch), patch('web_sources.asyncio.sleep', new=AsyncMock()) as sleep:
+        assert (await read_page('https://redd.it/abc12'))['via'] == 'reddit_feed'
+        sleep.assert_awaited_once_with(21.0)
+    web_sources._cache.clear()
+    with patch('web_sources.fetch_resource', new=AsyncMock(side_effect=web_sources.FetchError('HTTP 429', 429, 600.0))):
+        await expect_async_error(ValueError, read_page('https://redd.it/abc12'))
+
+    web_sources._cache.clear()
+    fetch = AsyncMock(side_effect=[web_sources.FetchError('HTTP 403', 403), resource(READER_COPY, 'text/plain')])
+    with patch('web_sources.fetch_resource', new=fetch):
+        page = await read_page('https://blocked.example.org/tea')
+    assert fetch.await_args.args == ('https://r.jina.ai/https://blocked.example.org/tea',)
+    assert page['via'] == 'r.jina.ai' and page['title'] == 'Blocked tea page' and page['url'] == 'https://blocked.example.org/tea'
+    assert page['text'].startswith('Steep green tea for two minutes.') and 'URL Source' not in page['text']
+    assert page['links'] == [{'url': 'https://blocked.example.org/guide', 'text': 'Guide'}]
+    assert [item['image_url'] for item in page['images']] == ['https://blocked.example.org/cup.png']
+
+    # Pages that only need JavaScript get one reader attempt; a failed attempt keeps the direct result.
+    web_sources._cache.clear()
+    fetch = AsyncMock(side_effect=[resource(b'<script>render()</script>'), web_sources.FetchError('HTTP 500', 500)])
+    with patch('web_sources.fetch_resource', new=fetch):
+        assert (await read_page('https://example.org/app'))['note'].startswith('No readable')
+    web_sources._cache.clear()
+    failed = b'Title: \n\nWarning: Target URL returned error 403: Forbidden\n\nMarkdown Content:\nBlocked'
+    for second in (resource(failed, 'text/plain'), web_sources.FetchError('HTTP 403', 403)):
+        with patch('web_sources.fetch_resource', new=AsyncMock(side_effect=[web_sources.FetchError('HTTP 403', 403), second])):
+            await expect_async_error(ValueError, read_page('https://blocked.example.org/tea'))
+        web_sources._cache.clear()
+    fetch = AsyncMock(side_effect=web_sources.FetchError('HTTP 404', 404))
+    with patch('web_sources.fetch_resource', new=fetch):
+        await expect_async_error(ValueError, read_page('https://example.org/missing'))
+    assert fetch.await_count == 1
 
 
 async def main():
@@ -177,7 +255,8 @@ async def main():
                 tool_reply('post_image', image_url=args['image_url'], source_url=args['source_url']),
                 ai_reply(content="Here's the photo, attached with its source."),
             ])
-            with patch('features.fetch_resource', new=AsyncMock(side_effect=[resource(), resource(image, 'image/png')])) as fetch:
+            fetch = AsyncMock(side_effect=[resource(), resource(image, 'image/png')])
+            with patch('features.fetch_resource', new=fetch), patch('web_sources.fetch_resource', new=fetch):
                 text, turn, _ = await bot.converse(guest)
                 assert 'attached' in text and bot.ai.chat.completions.create.await_count == 4
                 assert len(sent) == 1 and sent[0] == ('Source: <https://example.org/tea>', image, 'web-image.png')
@@ -196,7 +275,7 @@ async def main():
                 other.channel.send.assert_not_awaited()
             # Reading a public page doesn't need a search or image-provider key.
             feature.credentials.clear()
-            with patch('features.fetch_resource', new=AsyncMock(return_value=resource())):
+            with patch('web_sources.fetch_resource', new=AsyncMock(return_value=resource())):
                 result = await bot.execute('{"action":"web_fetch","url":"https://example.org/tea"}', other, tool='feature_tool')
                 assert result['ok'] and 'Steep the tea' in result['result']['text']
             # A lost Discord acknowledgement must never send the same image twice.
@@ -216,7 +295,8 @@ async def main():
                 assert not (await bot.execute(json.dumps(args), other, tool='feature_tool'))['ok']
                 other.channel.send.assert_not_awaited()
 
-    print('PASS: readable pages and pagination, source/image links, redirects and public-only addresses, download limits, image validation, permissions, image search, attachment delivery, replay and interrupted-send protection.')
+    await blocked_sites()
+    print('PASS: Reddit feeds, reader fallback for blocked sites, rate-limit waits, readable pages and pagination, source/image links, redirects and public-only addresses, download limits, image validation, permissions, image search, attachment delivery, replay and interrupted-send protection.')
 
 
 if __name__ == '__main__':

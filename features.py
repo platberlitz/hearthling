@@ -22,7 +22,7 @@ from providers import ProviderOptions, ReasoningEffort, connection_url
 from images import BUILTIN_IMAGE_MODELS, IMAGE_STYLE, ImageOptions, download_image, extension, gemini_picture, image_request, request_target, selected, styled
 from conversation import image_url, message_images, profile, resolved_reply
 from appearances import about_person, grounded_prompt, public_appearance, request_appearances
-from web_sources import IMAGE_BYTES, PAGE_BYTES, fetch_resource, page_content, picture_extension, public_url
+from web_sources import IMAGE_BYTES, PAGE_BYTES, fetch_resource, picture_extension, public_url, read_page
 
 
 IMAGE_MODEL = 'gpt-image-1'
@@ -377,6 +377,8 @@ class Features:
             'description': ('Search the web with Brave using query, limit and optional freshness (pd=day, pw=week, pm=month, py=year); '
                              'cite the returned source URLs. Public members may search without owner approval. '
                              'web_fetch opens a public url from a search result or the speaker, returning page text, links and image URLs. '
+                             'It reads Reddit posts, comments, subreddits and profiles, and retries sites that block bots through a reader service, '
+                             'so open shared Reddit and social links with web_fetch before answering about them. '
                              'Read relevant pages before reporting their contents; use next_offset as offset to continue long pages, with optional max_chars. '
                              'image_search uses query and limit to find existing pictures across websites, returning image_url and source_url. '
                              'When asked to find or show existing pictures, use image_search or web_fetch, then post_image with image_url and '
@@ -652,8 +654,8 @@ class Features:
         if args.action == 'image_search':
             return await self.web_search(args.query, args.limit, images=True)
         if args.action == 'web_fetch':
-            resource = await fetch_resource(args.url, check=self.check_public_link)
-            return page_content(resource, offset=args.offset or 0, max_chars=args.max_chars or 12000)
+            return await read_page(args.url, check=self.check_public_link, offset=args.offset or 0,
+                                   max_chars=args.max_chars or 12000)
         if args.action == 'post_image':
             return await self.post_image(args, request)
         if args.action == 'host_status':
