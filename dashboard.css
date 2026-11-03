@@ -66,8 +66,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 ui-monospa
 .app { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; padding: 32px 18px 20px; background: var(--surface); border-right: 1px solid var(--line); }
 .identity { display: flex; gap: 12px; align-items: center; margin: 0 5px 38px; }
-.identity img { object-fit: cover; border-radius: 50%; }
-.wordmark { font: 35px/1 var(--display); letter-spacing: -.04em; margin: 0 0 7px; }
+.identity img { width: 46px; height: 46px; flex-shrink: 0; object-fit: cover; border-radius: 50%; }
+.wordmark { font: 27px/1 var(--display); letter-spacing: -.04em; margin: 0 0 7px; }
 .wordmark span { color: var(--accent); }
 .identity-note { font-size: 11px; line-height: 1.4; color: var(--muted); margin: 0; max-width: 13ch; }
 .bot-picker { margin: -15px 5px 23px; }
@@ -204,7 +204,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 8px 0;
   .sidebar { padding: 25px 12px 16px; }
   .identity { gap: 9px; margin-inline: 4px; }
   .identity img { width: 46px; height: 46px; }
-  .wordmark { font-size: 30px; }
+  .wordmark { font-size: 25px; }
   .workspace { padding: 34px 25px 60px; }
   .connection-list > div { grid-template-columns: 1fr auto; gap: 7px 14px; }
   .connection-list dt { grid-column: 1 / -1; }
