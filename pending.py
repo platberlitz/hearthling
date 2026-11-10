@@ -28,6 +28,7 @@ def message_stamp(message):
 class RequestQueue:
     def __init__(self, bot):
         self.bot, self.db = bot, bot.db
+        self.recovery_before = time.time()
         self.notice_db = self.db
         self.db.execute('''CREATE TABLE IF NOT EXISTS request_queue (
             request_id TEXT NOT NULL, job TEXT NOT NULL, channel_id TEXT NOT NULL,
@@ -101,9 +102,37 @@ class RequestQueue:
 
     def recover(self):
         # Action receipts prevent repeating a completed or unconfirmed operation after a restart.
+        self.recover_images()
         self.db.execute("UPDATE request_queue SET state='pending' WHERE state='running'")
         self.db.execute("UPDATE request_queue SET state='uncertain', result='Delivery was interrupted; check Discord.' WHERE state='delivering'")
         self.db.commit()
+
+    def recover_images(self):
+        # Called by the live worker at startup, never by dashboard-only database readers.
+        features = self.bot.features
+        if features.image_lock.locked():
+            return
+        rows = self.db.execute("SELECT request_id,state,filename FROM pictures "
+                               "WHERE created_at<? AND state IN ('preparing','pending','retryable')",
+                               (self.recovery_before,)).fetchall()
+        for identity, state, filename in rows:
+            # A request interrupted in flight may have been billed; do not resubmit it.
+            saved_file = filename or any((features.data_dir / 'pictures').glob(f'*-{identity}.*'))
+            retryable = state != 'pending' and not saved_file
+            self.db.execute('UPDATE pictures SET state=? WHERE request_id=?',
+                            ('retryable' if retryable else 'uncertain', identity))
+            for fingerprint, arguments in self.db.execute(
+                    'SELECT fingerprint,arguments FROM actions WHERE request_id=? AND result IS NULL', (identity,)).fetchall():
+                action = json.loads(arguments).get('action')
+                if action not in {'generate_image', 'generate_gif'}:
+                    continue
+                result = {'ok': False, 'action': action, 'outcome_may_be_uncertain': not retryable,
+                          'error': ('Image generation was interrupted before a result was saved; ready to retry.' if retryable
+                                    else 'Image generation was interrupted with an unconfirmed outcome; it will not be repeated.')}
+                if retryable:
+                    result['retry_after'] = 30
+                self.db.execute('UPDATE actions SET result=? WHERE request_id=? AND fingerprint=?',
+                                (json.dumps(result), identity, fingerprint))
 
     async def original_message(self, item):
         channel = self.bot.get_channel(int(item['channel_id'])) or await self.bot.fetch_channel(int(item['channel_id']))

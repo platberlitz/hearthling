@@ -14,6 +14,9 @@ import time
 import uuid
 import zipfile
 
+from urllib.parse import quote
+
+import aiohttp
 from pydantic import BaseModel, ConfigDict, Field
 
 from characters import CharacterInput, LoreInput, parse_character
@@ -30,11 +33,20 @@ RELEASE_FILES = {
     'avatar.png', 'personality.txt', 'system-prompt.md', 'appearances.py', 'web_sources.py', 'README.md', 'LICENSE', 'requirements.txt',
     'testenv.py', 'test_hearthling.py', 'test_features.py', 'test_bots.py', 'test_conversation.py', 'test_memories.py', 'test_social.py',
     'test_pending.py', 'test_parity.py', 'test_expressions.py', 'test_members.py', 'test_wordle.py', 'test_releases.py', 'test_news.py',
-    'test_appearances.py', 'test_web_sources.py',
+    'test_appearances.py', 'test_web_sources.py', 'media.py', 'test_media.py',
+    'gifs.py', 'test_gifs.py',
 }
 # The bundled launcher is used by release checks; systemd keeps using the installed launcher.
-REQUIRED_FILES = RELEASE_FILES - {'README.md', 'LICENSE', 'first_run.py', 'avatar.png'}
+OPTIONAL_FILES = {'README.md', 'LICENSE', 'first_run.py', 'avatar.png'}
+REQUIRED_FILES = RELEASE_FILES - OPTIONAL_FILES
+CORE_FILES = {'hearthling.py', 'launcher.py', 'maintenance.py', 'requirements.txt'}
+SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
 MAX_RELEASE = 25 * 1024 * 1024
+MAX_DOWNLOAD = 60 * 1024 * 1024
+UPDATE_REPOSITORY = os.environ.get('HEARTHLING_UPDATE_REPOSITORY', 'platberlitz/hearthling')
+UPDATE_BRANCH = os.environ.get('HEARTHLING_UPDATE_BRANCH', 'main')
+UPDATE_CACHE_SECONDS = 300
+COMMIT = re.compile(r'[0-9a-f]{40}')
 
 
 def reload_bot(bot):
@@ -47,7 +59,6 @@ def reload_bot(bot):
     bot.personality = (CODE_ROOT / 'personality.txt').read_text()
     bot.characters.apply()
     bot.features.apply_connection()
-    bot.providers.rejected_vision.clear()
     bot.features.search_cache.clear()
 
 
@@ -181,14 +192,36 @@ def import_profile(bot, data, *, apply=False):
 
 
 def release_archive(root=CODE_ROOT):
-    files = {name: (root / name).read_bytes() for name in sorted(RELEASE_FILES) if (root / name).is_file()}
+    return pack_release({name: (root / name).read_bytes() for name in sorted(RELEASE_FILES) if (root / name).is_file()})
+
+
+def pack_release(files):
     manifest = {'format': 'hearthling-release-v1', 'files': {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()}}
     buffer = io.BytesIO()
+    # Fixed timestamps give identical programme files the same release ID.
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr('manifest.json', json.dumps(manifest, indent=2))
-        for name, raw in files.items():
-            archive.writestr(name, raw)
+        for name, raw in [('manifest.json', json.dumps(manifest, indent=2).encode())] + sorted(files.items()):
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type, entry.external_attr = zipfile.ZIP_DEFLATED, 0o600 << 16
+            archive.writestr(entry, raw)
     return buffer.getvalue()
+
+
+def declared_files(source):
+    """Let a newer release add or retire programme files, as long as its own updater lists them."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'RELEASE_FILES' for target in node.targets):
+            try:
+                value = ast.literal_eval(node.value)
+            except ValueError:
+                return None
+            if isinstance(value, set) and CORE_FILES <= value and all(isinstance(name, str) and SAFE_NAME.fullmatch(name) and '..' not in name for name in value):
+                return value
+    return None
 
 
 def inspect_release(raw):
@@ -198,13 +231,17 @@ def inspect_release(raw):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             infos = archive.infolist()
             names = [item.filename for item in infos]
-            if len(names) != len(set(names)) or set(names) - RELEASE_FILES - {'manifest.json'} or sum(item.file_size for item in infos) > MAX_RELEASE:
-                raise ValueError('The release contains duplicate, unknown or oversized files.')
+            if len(names) != len(set(names)) or sum(item.file_size for item in infos) > MAX_RELEASE:
+                raise ValueError('The release contains duplicate or oversized files.')
             if any(item.is_dir() or ((item.external_attr >> 16) & 0o170000) == 0o120000 for item in infos):
                 raise ValueError('Release directories and symbolic links are not allowed.')
+            allowed = (declared_files(archive.read('maintenance.py')) if 'maintenance.py' in names else None) or RELEASE_FILES
+            if set(names) - allowed - {'manifest.json'}:
+                raise ValueError('The release contains unknown files.')
             manifest = json.loads(archive.read('manifest.json'))
             files = manifest['files']
-            if manifest.get('format') != 'hearthling-release-v1' or not isinstance(files, dict) or set(files) != set(names) - {'manifest.json'} or not REQUIRED_FILES <= set(files):
+            if (manifest.get('format') != 'hearthling-release-v1' or not isinstance(files, dict) or set(files) != set(names) - {'manifest.json'}
+                    or not (allowed - OPTIONAL_FILES) <= set(files)):
                 raise ValueError('The release manifest does not match its contents.')
             contents = {name: archive.read(name) for name in files}
             for name, content in contents.items():
@@ -217,11 +254,82 @@ def inspect_release(raw):
                 if not line.strip() or line.startswith('#'):
                     continue
                 match = re.fullmatch(r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)', line.strip())
-                if not match or importlib.metadata.version(match[1]) != match[2]:
-                    raise ValueError('Install the release’s exact dependencies before applying it. This updater does not run package installers.')
+                if not match:
+                    raise ValueError('The release lists a dependency without an exact version.')
+                try:
+                    installed = importlib.metadata.version(match[1])
+                except importlib.metadata.PackageNotFoundError:
+                    installed = None
+                if installed != match[2]:
+                    raise ValueError(f'This release needs {match[1]}=={match[2]}. Install it with `.venv/bin/pip install -r requirements.txt` '
+                                     'from the new version, then try again. This updater does not run package installers.')
             return hashlib.sha256(raw).hexdigest()[:24], contents
-    except (zipfile.BadZipFile, KeyError, UnicodeError, SyntaxError, importlib.metadata.PackageNotFoundError, TypeError) as exc:
+    except (zipfile.BadZipFile, KeyError, UnicodeError, SyntaxError, TypeError) as exc:
         raise ValueError('This is not a valid, compatible Hearthling programme release.') from None
+
+
+def github_release(raw):
+    """Turn a GitHub source archive into a checked-release ZIP with only the programme's own files."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            items = {}
+            for item in archive.infolist():
+                parts = item.filename.split('/')
+                if len(parts) == 2 and parts[1] and not item.is_dir():
+                    items[parts[1]] = item
+            allowed = (declared_files(archive.read(items['maintenance.py'])) if 'maintenance.py' in items else None) or RELEASE_FILES
+            chosen = {name: item for name, item in items.items() if name in allowed}
+            if sum(item.file_size for item in chosen.values()) > MAX_RELEASE:
+                raise ValueError('The update is larger than 25 MiB.')
+            return pack_release({name: archive.read(item) for name, item in sorted(chosen.items())})
+    except zipfile.BadZipFile:
+        raise ValueError('GitHub returned an unreadable update archive. Try again later.') from None
+
+
+def update_source():
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', UPDATE_REPOSITORY) or not re.fullmatch(r'[A-Za-z0-9_./-]+', UPDATE_BRANCH):
+        raise ValueError('HEARTHLING_UPDATE_REPOSITORY must look like owner/name, with a plain branch name in HEARTHLING_UPDATE_BRANCH.')
+    return UPDATE_REPOSITORY, UPDATE_BRANCH
+
+
+async def github_request(url, *, binary=False):
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120), headers={
+            'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Hearthling-updater'}) as session:
+        async with session.get(url) as response:
+            if response.status in {404, 422}:
+                return None
+            if response.status in {403, 429}:
+                raise ValueError('GitHub is limiting update checks from this server right now. Try again in an hour.')
+            if response.status != 200:
+                raise ValueError(f'GitHub returned HTTP {response.status} while checking for updates. Try again later.')
+            if not binary:
+                return await response.json()
+            raw = bytearray()
+            async for chunk in response.content.iter_chunked(65536):
+                raw += chunk
+                if len(raw) > MAX_DOWNLOAD:
+                    raise ValueError('The update download is unexpectedly large, so it was not used.')
+            return bytes(raw)
+
+
+def installed_commit(root=INSTALL_ROOT):
+    """Read the checkout's commit from .git directly, so the updater works without git installed."""
+    git = root / '.git'
+    try:
+        head = (git / 'HEAD').read_text().strip()
+        if head.startswith('ref: '):
+            ref = head[5:]
+            if (git / ref).is_file():
+                head = (git / ref).read_text().strip()
+            else:
+                head = next(line.split()[0] for line in (git / 'packed-refs').read_text().splitlines() if line.endswith(' ' + ref))
+    except (OSError, StopIteration):
+        return None
+    return head if COMMIT.fullmatch(head) else None
+
+
+def first_line(text):
+    return (text or '').strip().split('\n', 1)[0][:200]
 
 
 class Maintenance:
@@ -230,17 +338,69 @@ class Maintenance:
         self.data = getattr(dashboard.features, 'data_dir', INSTALL_ROOT / 'data')
         self.directory = self.data / 'releases'
         self.lock = asyncio.Lock()
+        self.update_cache = None
+
+    def read(self, name):
+        path = self.directory / name
+        return json.loads(path.read_text()) if path.is_file() else None
 
     def status(self):
-        def read(name):
-            path = self.directory / name
-            return json.loads(path.read_text()) if path.is_file() else None
-        return {'current': os.environ.get('HEARTHLING_RELEASE', 'installed'), 'active': read('active.json'),
-                'staged': read('staged.json'), 'last_update': read('status.json'),
+        return {'current': os.environ.get('HEARTHLING_RELEASE', 'installed'), 'current_commit': self.current_commit(),
+                'active': self.read('active.json'), 'staged': self.read('staged.json'), 'last_update': self.read('status.json'),
+                'update_source': '{}@{}'.format(UPDATE_REPOSITORY, UPDATE_BRANCH),
                 'can_restart': bool(self.dashboard.manager and getattr(self.dashboard.manager, 'stop_event', None)),
                 'can_update': os.environ.get('HEARTHLING_LAUNCHER') == '1'}
 
-    async def stage(self, raw):
+    def current_commit(self):
+        release = os.environ.get('HEARTHLING_RELEASE', 'installed')
+        if release == 'installed':
+            return installed_commit(INSTALL_ROOT)
+        return (self.read('commits.json') or {}).get(release)
+
+    async def check_update(self, refresh=False):
+        current = self.current_commit()
+        cached = self.update_cache
+        if not refresh and cached and cached['current_commit'] == current and time.time() - cached['checked_at'] < UPDATE_CACHE_SECONDS:
+            return cached
+        repository, branch = update_source()
+        latest = await github_request(f'https://api.github.com/repos/{repository}/commits/{quote(branch, safe="")}')
+        if not isinstance(latest, dict) or not COMMIT.fullmatch(str(latest.get('sha'))):
+            raise ValueError(f'GitHub has no {branch} branch for {repository}.')
+        details = latest.get('commit') if isinstance(latest.get('commit'), dict) else {}
+        result = {'repository': repository, 'branch': branch, 'current_commit': current, 'latest_commit': latest['sha'],
+                  'latest_message': first_line(details.get('message')), 'latest_date': (details.get('committer') or {}).get('date'),
+                  'status': 'unknown', 'behind_by': None, 'changes': [], 'checked_at': time.time()}
+        if current == latest['sha']:
+            result['status'] = 'current'
+        elif current:
+            compare = await github_request(f'https://api.github.com/repos/{repository}/compare/{current}...{latest["sha"]}')
+            if isinstance(compare, dict):
+                result['status'] = {'ahead': 'available', 'identical': 'current', 'behind': 'newer', 'diverged': 'diverged'}.get(compare.get('status'), 'unknown')
+                result['behind_by'] = compare.get('ahead_by')
+                result['changes'] = [{'commit': item['sha'][:7], 'message': first_line(item.get('commit', {}).get('message'))}
+                                     for item in (compare.get('commits') or [])[-20:] if isinstance(item, dict) and isinstance(item.get('sha'), str)][::-1]
+        self.update_cache = result
+        return result
+
+    async def download_update(self):
+        if self.lock.locked():
+            raise ValueError('A release check is already running. Wait for it to finish.')
+        update = await self.check_update(refresh=True)
+        if update['status'] == 'current':
+            raise ValueError('Hearthling is already up to date.')
+        if update['status'] == 'newer':
+            raise ValueError('This installation is newer than the published version, so there is nothing to update.')
+        raw = await github_request(f'https://codeload.github.com/{update["repository"]}/zip/{update["latest_commit"]}', binary=True)
+        if not raw:
+            raise ValueError('GitHub could not provide the update download. Try again later.')
+        result = await self.stage(github_release(raw), source={'commit': update['latest_commit'], 'repository': update['repository']})
+        commits = self.read('commits.json') or {}
+        commits[result['id']] = update['latest_commit']
+        write_private_json(self.directory / 'commits.json', commits)
+        self.update_cache = None
+        return result
+
+    async def stage(self, raw, source=None):
         async with self.lock:
             identity, contents = inspect_release(raw)
             self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -273,7 +433,7 @@ class Maintenance:
                     raise ValueError(f'The {check} release check timed out; the running programme was not changed.') from None
                 if process.returncode:
                     raise ValueError(f'The {check} release check failed; the running programme was not changed.')
-            result = {'id': identity, 'files': len(contents), 'checks_passed': checks, 'checked_at': time.time()}
+            result = {'id': identity, 'files': len(contents), 'checks_passed': checks, 'checked_at': time.time()} | (source or {})
             write_private_json(self.directory / 'staged.json', result)
             return result
 

@@ -344,7 +344,7 @@ def normalise(spec, data):
 class Providers:
     def __init__(self, bot):
         self.bot, self.db = bot, bot.db
-        self.rejected_vision, self.rejected_prefill, self.rejected_partial = set(), set(), set()
+        self.rejected_prefill, self.rejected_partial = set(), set()
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, configuration TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS provider_requests (id INTEGER PRIMARY KEY, at REAL NOT NULL, provider TEXT NOT NULL,
@@ -403,7 +403,6 @@ class Providers:
         self.bot.features.credentials = credentials
         self.db.execute('INSERT OR REPLACE INTO providers VALUES (?,?)', (value.id, value.model_dump_json()))
         self.db.commit()
-        self.rejected_vision.clear()
         self.rejected_prefill.clear()
         self.rejected_partial.clear()
 
@@ -458,6 +457,11 @@ class Providers:
                     part['inlineData'] = cache[url]
 
     async def send(self, spec, messages, options):
+        if spec.family in {'openai_chat', 'openai_responses'}:
+            try:
+                messages = await self.inline_images(messages)
+            except ValueError as exc:
+                raise APIError(self.bot.features.clean_error(exc), request=httpx.Request('POST', spec.base_url), body=None) from None
         body = build_request(spec, messages, options)
         if main_connection(spec):
             return await self.bot.ai.chat.completions.create(**body)
@@ -496,6 +500,27 @@ class Providers:
             raise APIConnectionError(request=request, message=f'{spec.name} connection failed ({type(exc).__name__}).') from None
         except (ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
             raise APIError(self.bot.features.clean_error(exc), request=request, body=None) from None
+
+    async def inline_images(self, messages):
+        from conversation import image_url
+        from images import download_image, extension
+        converted, cache = copy.deepcopy(messages), {}
+        for message in converted:
+            if not isinstance(message.get('content'), list):
+                continue
+            for part in message['content']:
+                if part.get('type') != 'image_url':
+                    continue
+                url = part['image_url']['url']
+                if not image_url(url):
+                    raise ValueError('Only supplied Discord images may be sent to a vision provider.')
+                if url not in cache:
+                    raw = await download_image(url, maximum=10 * 1024 * 1024)
+                    kind = extension(raw)
+                    mime = 'image/jpeg' if kind == 'jpg' else 'image/' + kind
+                    cache[url] = f'data:{mime};base64,' + base64.b64encode(raw).decode()
+                part['image_url']['url'] = cache[url]
+        return converted
 
     def record(self, spec, elapsed, response=None, error=None, messages=None):
         usage = getattr(response, 'usage', None)
@@ -545,29 +570,43 @@ class Providers:
                 return await self.send(spec, messages, options)
 
     async def reply(self, messages, *, preferred=None, prefill=False, **options):
-        from conversation import text_only
+        has_images = any(isinstance(item.get('content'), list) and
+                         any(part.get('type') == 'image_url' for part in item['content']) for item in messages)
         last_error = None
         for identity in self.order(preferred):
             spec = self.get(identity)
             key = (spec.base_url, spec.model)
             if not prefill:
                 spec = spec.model_copy(update={'prefill': ''})
-            attempt = messages if spec.vision and key not in self.rejected_vision else text_only(messages)
+            if has_images and not spec.vision:
+                last_error = APIError(f'{spec.name} has image input disabled; the image request was not sent as text-only.',
+                                      request=httpx.Request('POST', spec.base_url), body=None)
+                continue
+            attempt = messages
             started = time.monotonic()
             try:
-                try:
-                    response = await self.send_prefilled(spec, key, attempt, options)
-                except APIError as exc:
-                    has_images = any(isinstance(item.get('content'), list) and any(part.get('type') == 'image_url' for part in item['content']) for item in attempt)
-                    if getattr(exc, 'status_code', None) not in {400, 422} or not has_images or not re.search(r'image|vision|multimodal', str(exc), re.I):
-                        raise
-                    self.rejected_vision.add(key)
-                    self.bot.features.record_status('vision', {'ok': False, 'error': 'This model rejected images and is text-only for this process.', 'model': spec.model})
-                    response = await self.send_prefilled(spec, key, text_only(messages), options)
+                response = await self.send_prefilled(spec, key, attempt, options)
+                choice = response.choices[0] if response.choices else None
+                answer = choice.message if choice else None
+                reason = getattr(choice, 'finish_reason', None)
+                # This upstream marker can precede planning fused directly to dialogue.
+                # Reject the whole response, including tool calls; removing the label leaks the rest.
+                if answer and re.search(r'^\s*hthought\s*$', answer.content or '', re.I | re.M):
+                    reason = 'leaked thinking marker'
+                if reason in {'malformed_function_call', 'leaked thinking marker'} or not answer or not (
+                        (answer.content or '').strip() or answer.tool_calls or getattr(answer, 'refusal', None)):
+                    last_error = APIError(f'{spec.name} returned an unusable reply ({reason or "empty response"}).',
+                                          request=httpx.Request('POST', spec.base_url), body=None)
+                    self.record(spec, time.monotonic() - started, response=response, error=last_error, messages=attempt)
+                    continue
                 self.record(spec, time.monotonic() - started, response=response, messages=attempt)
+                if has_images:
+                    self.bot.features.record_status('vision', {'ok': True, 'model': spec.model})
                 return response
             except APIError as exc:
                 self.record(spec, time.monotonic() - started, error=exc, messages=attempt)
+                if has_images:
+                    self.bot.features.record_status('vision', {'ok': False, 'error': self.bot.features.clean_error(exc), 'model': spec.model})
                 last_error = exc
         raise last_error
 

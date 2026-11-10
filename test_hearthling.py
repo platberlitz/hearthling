@@ -55,6 +55,24 @@ async def main():
     request.to_reference = lambda **kwargs: discord.MessageReference(
         message_id=request.id, channel_id=channel.id, guild_id=SERVER_ID, **kwargs)
     assert permitted_request(request)
+    for content in ('https://cdn.discordapp.com/attachments/123/456/Hearthling-portrait.png?x=1',
+                    'Here is hearthling.png.', '[hearthling-dance.gif](https://example.org/file.gif)',
+                    'HEARTHLING-results-123.jsonl', '<:Hearthling:12345>', ''):
+        request.content = content
+        request.attachments = [NS(filename='Hearthling portrait.png')]
+        assert not should_reply(request), content
+    request.content = 'Hearthling portrait.png'
+    assert not should_reply(request)
+    for content in ('Hearthling, look at hearthling.png', 'Hearthling!', 'Hello, Hearthling.',
+                    'https://example.org/hearthling.gif Hearthling, hello'):
+        request.content = content
+        assert should_reply(request), content
+    request.content = 'hearthling.png'
+    request.mentions = [NS(id=APPLICATION_ID)]
+    assert should_reply(request)
+    request.mentions = []
+    request.attachments = []
+    request.content = 'Hearthling, check the server.'
     for author, place, expected in (
         (owner, None, True), (owner, NS(id=123), False),
         (NS(id=123, bot=False), guild, False), (NS(id=OWNER_ID, bot=True), guild, False),
@@ -203,7 +221,7 @@ async def main():
                 await bot.converse(follow_up)
                 authorise.assert_not_awaited()
             sent = bot.ai.chat.completions.create.call_args.kwargs
-            assert [tool['function']['name'] for tool in sent['tools']] == ['feature_tool']
+            assert [tool['function']['name'] for tool in sent['tools']] == ['feature_tool', 'post_media']
             assert 'host_status' not in sent['tools'][0]['function']['parameters']['properties']['action']['enum']
             system = sent['messages'][0]['content']
             assert all(section in system for section in ('<character_identity>', '<knowledge_limits>', '<psychological_boundaries>', '<conversation_style>'))

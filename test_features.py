@@ -67,7 +67,7 @@ async def main():
             add_turn(db, owner, json.dumps([{'role': 'assistant', 'content': 'Owner-private-history'}]))
             add_turn(db, guest)
             guest_actions = feature.tool(guest)['function']['parameters']['properties']['action']['enum']
-            assert {'generate_image', 'web_search', 'web_fetch', 'image_search', 'post_image', 'remember', 'recall', 'forget',
+            assert {'generate_image', 'generate_gif', 'make_gif', 'web_search', 'web_fetch', 'image_search', 'post_image', 'post_media', 'remember', 'recall', 'forget',
                     'set_timezone', 'set_reminder', 'list_reminders', 'cancel_reminder',
                     'list_expressions', 'react', 'send_sticker', 'add_emoji', 'add_sticker',
                     'lookup_members', 'ping_member', 'set_my_colour'} == set(guest_actions)
@@ -248,7 +248,7 @@ async def main():
                 payload = edit_session.post.call_args.kwargs['json']
                 parts = payload['input'][0]['content']
                 assert [part['type'] for part in parts] == ['input_text', 'input_image']
-                assert parts[0]['text'].startswith('A companion portrait')
+                assert source.content in parts[0]['text'] and 'A companion portrait' not in parts[0]['text']
                 assert parts[1]['image_url'] == 'data:image/png;base64,' + base64.b64encode(PNG).decode()
                 assert parts[1]['detail'] == 'high' and payload['tools'][0]['action'] == 'edit'
                 download.assert_awaited_once_with('https://cdn.discordapp.com/attachments/1/2/source.png', maximum=10 * 1024 * 1024)

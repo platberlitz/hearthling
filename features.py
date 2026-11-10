@@ -18,9 +18,11 @@ from urllib.parse import urlsplit
 import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from social import SocialOptions
+from media import resolve_media
+from gifs import convert_gif, frame_prompt, native_gif, native_options, sheet_gif, source_url as gif_source_url
 from providers import ProviderOptions, ReasoningEffort, connection_url
-from images import BUILTIN_IMAGE_MODELS, IMAGE_STYLE, ImageOptions, download_image, extension, gemini_picture, image_request, request_target, selected, styled
-from conversation import image_url, message_images, profile, resolved_reply
+from images import BUILTIN_IMAGE_MODELS, IMAGE_STYLE, ImageOptions, download_image, extension, gemini_picture, image_request, key_alternatives, request_target, selected, styled
+from conversation import image_sources, image_url, message_images, profile
 from appearances import about_person, grounded_prompt, public_appearance, request_appearances
 from web_sources import IMAGE_BYTES, PAGE_BYTES, fetch_resource, picture_extension, public_url, read_page
 
@@ -171,7 +173,7 @@ class Settings(SocialOptions, ProviderOptions, ImageOptions):
 
 class FeatureAction(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-    action: Literal['generate_image', 'web_search', 'web_fetch', 'image_search', 'post_image', 'host_status', 'remember', 'recall', 'forget', 'dashboard',
+    action: Literal['generate_image', 'generate_gif', 'make_gif', 'web_search', 'web_fetch', 'image_search', 'post_image', 'post_media', 'host_status', 'remember', 'recall', 'forget', 'dashboard',
                     'set_reminder', 'list_reminders', 'cancel_reminder', 'set_timezone',
                     'list_expressions', 'react', 'send_sticker', 'add_emoji', 'add_sticker',
                     'lookup_members', 'ping_member', 'set_my_colour']
@@ -179,6 +181,11 @@ class FeatureAction(BaseModel):
     subjects: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
     size: ImageSize | None = None
     art_style: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    gif_effect: Literal['auto', 'zoom', 'shake', 'spin'] = 'auto'
+    gif_seconds: float = Field(default=2, ge=1, le=8)
+    gif_start: float = Field(default=0, ge=0, le=3600)
+    gif_fps: int = Field(default=10, ge=2, le=15)
+    gif_width: int = Field(default=480, ge=128, le=512)
     limit: Annotated[int, Field(ge=1, le=20)] = 10
     fact: Annotated[str, Field(min_length=1, max_length=400)] | None = None
     query: Annotated[str, Field(max_length=400)] = ''
@@ -352,7 +359,7 @@ class Features:
         if self.settings.expression_uploads and (owner or self.settings.public_expression_uploads):
             allowed.extend(('add_emoji', 'add_sticker'))
         if self.settings.images_enabled and (owner or self.settings.public_images):
-            allowed.extend(('generate_image', 'post_image'))
+            allowed.extend(('generate_image', 'generate_gif', 'make_gif', 'post_image', 'post_media'))
         if self.settings.personal_colours and request.guild is not None:
             allowed.append('set_my_colour')
         if self.settings.search_enabled and (owner or self.settings.public_search):
@@ -374,7 +381,10 @@ class Features:
         schema['properties']['action']['enum'] = allowed
         return {'type': 'function', 'function': {
             'name': 'feature_tool', 'parameters': schema,
-            'description': ('Search the web with Brave using query, limit and optional freshness (pd=day, pw=week, pm=month, py=year); '
+            'description': ('Call feature_tool with the chosen action in the action field, for example '
+                             'feature_tool({"action":"generate_image","prompt":"A cup of tea"}). '
+                             'Use this same function for every action listed below. '
+                             'Search the web with Brave using query, limit and optional freshness (pd=day, pw=week, pm=month, py=year); '
                              'cite the returned source URLs. Public members may search without owner approval. '
                              'web_fetch opens a public url from a search result or the speaker, returning page text, links and image URLs. '
                              'It reads Reddit posts, comments, subreddits and profiles, and retries sites that block bots through a reader service, '
@@ -383,7 +393,21 @@ class Features:
                              'image_search uses query and limit to find existing pictures across websites, returning image_url and source_url. '
                              'When asked to find or show existing pictures, use image_search or web_fetch, then post_image with image_url and '
                              'the original source_url to upload each chosen picture here. post_image accepts direct PNG, JPEG, WebP and GIF URLs, '
-                             'posts the actual file with its source, and reports confirmed delivery. Use generate_image for requests to create new artwork. '
+                              'posts the actual file with its source, and reports confirmed delivery. Use generate_image for requests to create new artwork. '
+                                'generate_gif creates new animated artwork from prompt. GPT Image 2.6 generates a native GIF; '
+                                'native GIF dimensions are selected automatically to fit the frame budget, regardless of size. '
+                              'other models and Images API edit requests use 16 generated frames assembled locally. Describe the action and subjects, '
+                              'using the same subjects, image_url and art_style rules as generate_image. References are attached automatically. '
+                              'This is frame-by-frame animation, not video generation. gif_seconds sets the loop length (1-8, default 2). '
+                              'make_gif converts an existing url, attachment or replied-to image/video to a GIF. '
+                              'For still images choose gif_effect zoom, shake or spin; auto defaults to zoom. For videos or '
+                              'animated images use auto, gif_start (seconds into the clip) and gif_seconds (1-8). '
+                              'gif_fps (2-15, default 10) and gif_width (128-512, default 480) control conversion size. '
+                              'Use generate_gif for new subject movement, make_gif for simple picture effects or video conversion. '
+                              'post_media takes url to embed or repost existing public videos, images and GIFs from Reddit, Facebook, Instagram, '
+                              'TikTok, X, YouTube and other web pages here. Use it when asked to embed, show or play a social link. '
+                              'It uploads supported media with its source, including video audio when available. A link or thumbnail fallback '
+                              'is not a playable video: describe the returned kind and note accurately. Private/login-only posts are unavailable. '
                              'lookup_members resolves real usernames, global names and server nicknames (query); ping_member uses member name/ID '
                              'to send a real requested notification here. set_my_colour sets ONLY the speaker’s personal role to colour #RRGGBB. '
                              'generate_image creates requested new artwork; images attached to or linked in the request, and readable images '
@@ -647,8 +671,10 @@ class Features:
             return await self.bot.expressions.use(request, args.action, args.expression, message_id=args.message_id)
         if args.action in {'add_emoji', 'add_sticker'}:
             return await self.bot.expressions.upload(request, args)
-        if args.action == 'generate_image':
+        if args.action in {'generate_image', 'generate_gif'}:
             return await self.generate_image(args, request)
+        if args.action == 'make_gif':
+            return await self.make_gif(args, request)
         if args.action == 'web_search':
             return await self.web_search(args.query, args.limit, args.freshness)
         if args.action == 'image_search':
@@ -658,6 +684,8 @@ class Features:
                                    max_chars=args.max_chars or 12000)
         if args.action == 'post_image':
             return await self.post_image(args, request)
+        if args.action == 'post_media':
+            return await self.post_media(args, request)
         if args.action == 'host_status':
             return await host_status(self.settings.host_services)
         if args.action == 'dashboard':
@@ -706,14 +734,12 @@ class Features:
         raise ValueError('Unknown feature.')
 
     async def image_references(self, args, request, spec):
-        candidates = message_images(request, 'Current message')
-        replied = await resolved_reply(request)
-        if replied is not None:
-            candidates.extend(message_images(replied, 'Referenced message'))
+        sources = await image_sources(self.bot, request)
+        candidates = [item for source in sources for item in message_images(source, 'Source message')]
         seen = {item['url'] for item in candidates}
         if getattr(args, 'image_url', None):
             url = args.image_url.rstrip('.,!?')
-            text = request.content + ('\n' + replied.content if replied is not None else '')
+            text = '\n'.join(source.content for source in sources)
             found = {value.rstrip('.,!?') for value in re.findall(r'https://[^\s<>\[\]()"\']+', text)}
             if image_url(url) is None or self.redact(url) != url or (url not in seen and url not in found):
                 raise FeatureError('Choose an image attached, linked or visibly referenced in this request.')
@@ -749,24 +775,38 @@ class Features:
             now = int(time.time())
             art_style = getattr(args, 'art_style', None)
             references = await self.image_references(args, request, spec)
-            prompt = await grounded_prompt(self, args, request)
+            prompt = await grounded_prompt(self, args, request, reference_edit=bool(references))
+            if references:
+                from images import reference_prompt
+                sources = await image_sources(self.bot, request)
+                source_context = '\n'.join(source.content for source in reversed(sources[1:])
+                                           if not source.author.bot and source.content)
+                prompt = reference_prompt(prompt, request.content, source_context)
+            animated = getattr(args, 'action', None) == 'generate_gif'
             self.db.execute('INSERT OR REPLACE INTO pictures (request_id, author_id, channel_id, created_at, filename, state, prompt) '
-                            'VALUES (?, ?, ?, ?, NULL, ?, ?)', (identity, author, str(request.channel.id), now, 'pending', styled(prompt, art_style, self.settings.image_style)))
+                            'VALUES (?, ?, ?, ?, NULL, ?, ?)', (identity, author, str(request.channel.id), now, 'preparing', styled(prompt, art_style, self.settings.image_style)))
             self.db.commit()
             try:
                 attempts = []
                 for provider_id in dict.fromkeys([spec.id, *self.settings.image_fallback_providers]):
                     candidate, candidate_key = selected(self, provider_id)
-                    keys = list(dict.fromkeys([candidate_key, *self.credentials.get('image_fallback_keys', [])]))[:4] if candidate.id in BUILTIN_IMAGE_MODELS else [candidate_key]
+                    keys = key_alternatives(self, candidate, candidate_key)
                     attempts.extend((candidate, value) for value in keys)
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=spec.timeout)) as session:
-                    rejected_provider = None
+                    retry_after = None
                     for index, (spec, attempt_key) in enumerate(attempts):
-                        if spec.id == rejected_provider:
-                            continue
-                        payload = image_request(spec, prompt, args.size, references, art_style, self.settings.image_style)
+                        native = native_options(spec, references=references, seconds=args.gif_seconds,
+                            fps=args.gif_fps, size=args.size) if animated else None
+                        sent_prompt = (f'{prompt}\n\nCreate a looping animated GIF showing the requested motion.' if native
+                                       else frame_prompt(prompt) if animated else prompt)
+                        self.db.execute('UPDATE pictures SET prompt=? WHERE request_id=?',
+                                        (styled(sent_prompt, art_style, self.settings.image_style), identity))
+                        self.db.commit()
+                        payload = image_request(spec, sent_prompt, args.size, references, art_style, self.settings.image_style, animation=native)
                         url, headers = request_target(spec, attempt_key, edit=bool(references))
                         body_args = {'data': payload} if isinstance(payload, aiohttp.FormData) else {'json': payload}
+                        self.db.execute("UPDATE pictures SET state='pending' WHERE request_id=?", (identity,))
+                        self.db.commit()
                         async with session.post(url, **body_args, headers=headers, allow_redirects=False,
                                                 timeout=aiohttp.ClientTimeout(total=spec.timeout)) as response:
                             body = await bounded_body(response, 40 * 1024 * 1024)
@@ -778,20 +818,19 @@ class Features:
                         error = data.get('error') or data.get('message') or reason if isinstance(data, dict) else reason
                         if isinstance(error, dict):
                             error = error.get('message') or error.get('code') or 'Request rejected'
-                        # Only a definite daily-quota refusal permits another paid-provider key.
+                        # Definite refusals can try the next key; unknown paid outcomes cannot.
                         daily_quota = status == 429 and bool(re.search(r'\bdaily\b.*\b(quota|limit)\b.*\b(exceeded|exhausted|reached)\b', str(error), re.I))
                         unavailable_keys = status == 503 and str(error).strip().casefold() == 'no valid openai api keys available for this model'
+                        if status == 429 or unavailable_keys:
+                            retry_after = max(retry_after or 0, 3600 if daily_quota else 60)
                         if status in {401, 403, 404, 429} or unavailable_keys:
-                            # Definite refusals can move to another connection. Unknown outcomes cannot.
-                            remaining = attempts[index + 1:]
-                            if daily_quota and remaining:
-                                continue
-                            if any(candidate.id != spec.id for candidate, _ in remaining):
-                                rejected_provider = spec.id
+                            self.db.execute("UPDATE pictures SET state='preparing' WHERE request_id=?", (identity,))
+                            self.db.commit()
+                            if index + 1 < len(attempts):
                                 continue
                         if status != 200:
                             raise FeatureError(self.clean_error(f'{spec.name} HTTP {status}: {error}'), uncertain=status >= 500 and not unavailable_keys,
-                                               retry_after=(3600 if daily_quota else 60) if status == 429 else None)
+                                               retry_after=retry_after if status in {401, 403, 404, 429} or unavailable_keys else None)
                         break
                     if not isinstance(data, dict):
                         raise FeatureError(f'{spec.name} returned an unexpected response; the paid request will not be repeated.', uncertain=True)
@@ -825,6 +864,18 @@ class Features:
                     suffix = extension(image)
                 except (ValueError, TypeError):
                     raise FeatureError(f'{spec.name} returned unreadable image data; the paid request will not be repeated.', uncertain=True) from None
+                if animated:
+                    try:
+                        maximum = min(25 * 1024 * 1024, getattr(request.guild, 'filesize_limit', 10 * 1024 * 1024))
+                        if native:
+                            image = await asyncio.to_thread(native_gif, image, maximum=maximum)
+                        else:
+                            image = await asyncio.to_thread(sheet_gif, image, seconds=args.gif_seconds,
+                                                          width=args.gif_width, maximum=maximum)
+                    except (ValueError, OSError, EOFError) as exc:
+                        raise FeatureError(f'Animation assembly failed: {exc} The paid request will not be repeated.', uncertain=True) from None
+                    self.validate(args.model_dump_json(), request)
+                    suffix = 'gif'
                 directory = self.data_dir / 'pictures'
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 filename = f'picture-{identity}.{suffix}'
@@ -835,6 +886,7 @@ class Features:
                 self.db.execute("UPDATE pictures SET filename=?, state='complete' WHERE request_id=?", (filename, identity))
                 self.db.commit()
                 return {'filename': filename, 'bytes': len(image), 'model': spec.model,
+                        **({'kind': 'gif', 'animation': 'native GIF' if native else '16 generated frames assembled into a loop'} if animated else {}),
                         'delivery': 'The actual image will be attached automatically to your reply.'}
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
                 self.db.execute("UPDATE pictures SET state='uncertain' WHERE request_id=?", (identity,))
@@ -849,6 +901,63 @@ class Features:
     def check_public_link(self, url):
         if self.redact(url) != url:
             raise ValueError('Public web requests cannot contain saved credentials or private sign-in links.')
+
+    async def make_gif(self, args, request):
+        self.require_assistant()
+        source = public_url(await gif_source_url(args, request))
+        self.check_public_link(source)
+        if len(source) > 1800:
+            raise ValueError('Use a source URL shorter than 1800 characters.')
+        if self.image_lock.locked():
+            raise FeatureError('An image or GIF is already being created.', retry_after=30)
+        async with self.image_lock:
+            try:
+                body = await convert_gif(source, check=self.check_public_link, effect=args.gif_effect,
+                    seconds=args.gif_seconds, start=args.gif_start, fps=args.gif_fps, width=args.gif_width,
+                    maximum=getattr(request.guild, 'filesize_limit', 10 * 1024 * 1024))
+            except TimeoutError:
+                raise ValueError('GIF conversion timed out. Try a shorter clip or a smaller source file.') from None
+            self.validate(args.model_dump_json(), request)
+            import discord
+            attachment = discord.File(io.BytesIO(body), filename='animation.gif')
+            try:
+                message = await request.channel.send(f'Source: <{source}>', file=attachment,
+                    reference=request.to_reference(fail_if_not_exists=False), allowed_mentions=discord.AllowedMentions.none())
+            finally:
+                attachment.close()
+        return {'posted': True, 'media_uploaded': True, 'kind': 'gif', 'bytes': len(body),
+                'source_url': source, 'message_id': str(message.id),
+                'delivery': 'The animated GIF has been uploaded in this conversation.'}
+
+    async def post_media(self, args, request):
+        self.require_assistant()
+        source = public_url(args.url)
+        self.check_public_link(source)
+        if len(source) > 1800:
+            raise ValueError('Use a source URL shorter than 1800 characters.')
+        maximum = getattr(request.guild, 'filesize_limit', 10 * 1024 * 1024)
+        try:
+            async with asyncio.timeout(150):
+                media = await resolve_media(source, maximum=maximum, check=self.check_public_link)
+        except TimeoutError:
+            media = {'kind': 'link', 'source_url': source,
+                     'note': 'Media retrieval timed out. Only the original link was posted, not a playable video.'}
+        self.validate(args.model_dump_json(), request)
+        import discord
+        body = media.pop('body', None)
+        attachment = discord.File(io.BytesIO(body), filename=media['filename']) if body else None
+        try:
+            options = {'reference': request.to_reference(fail_if_not_exists=False),
+                       'allowed_mentions': discord.AllowedMentions.none()}
+            if attachment:
+                options['file'] = attachment
+            content = f'Source: <{source}>' if attachment else f'Media unavailable for upload. Original link:\n{source}'
+            message = await request.channel.send(content, **options)
+        finally:
+            if attachment:
+                attachment.close()
+        return {**media, 'posted': True, 'media_uploaded': bool(body), 'bytes': len(body or b''),
+                'message_id': str(message.id)}
 
     async def post_image(self, args, request):
         self.require_assistant()

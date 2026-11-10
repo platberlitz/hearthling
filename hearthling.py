@@ -18,7 +18,7 @@ from pending import QUEUED_NOTICE, temporary_chat_error
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from features import Features, load_credentials, redact_private_links
-from conversation import memory_focus, memory_text, message_content, model_reply, profile, shared_history, text_only
+from conversation import memory_focus, memory_text, message_content, model_reply, profile, shared_history, spoken_text, text_only
 from people import People, names
 from commands import register_commands, sync_commands
 from social import Social
@@ -40,10 +40,10 @@ NAME = 'Hearthling'
 MAX_TOOL_CALLS = 8
 # ponytail: wording heuristic; catches the common "I made/attached it" lies, not every phrasing.
 PICTURE_CLAIM = re.compile(r"\b(attached|generated|i (?:made|drew|painted|sketched|created) you|here(?:'|’)?s (?:your|the|a) (?:pic|picture|image|drawing))", re.I)
-PICTURE_WORD = re.compile(r'\b(pic|pics|picture|image|photo|draw|drew|drawing|art|sketch|portrait|scene|illustration|gen)\b', re.I)
-FAKE_PICTURE_NOTE = ('Check: you did not call generate_image or post_image in this request, so no picture is attached. '
+PICTURE_WORD = re.compile(r'\b(pic|pics|picture|image|photo|draw|drew|drawing|art|sketch|portrait|scene|illustration|gen|gif|animation)\b', re.I)
+FAKE_PICTURE_NOTE = ('Check: you did not call an image or GIF tool in this request, so no picture is attached. '
                      'For a requested existing web picture, find it with image_search or web_fetch and call post_image. '
-                     'For requested new artwork, call generate_image. Use only offered actions. '
+                     'For requested new artwork, call generate_image, or generate_gif for animation. Use make_gif to convert existing media. Use only offered actions. '
                      'Otherwise reply without claiming a picture was made or attached.')
 READ_ACTIONS = {'server_info', 'find_members', 'read_messages', 'audit_log', 'list_bans'}
 FALLBACKS = {
@@ -136,7 +136,7 @@ def should_reply(message, *, public_chat=True, name_trigger=True, bot_id=APPLICA
     reference = message.reference
     replied = reference.resolved if (reference and reference.channel_id == message.channel.id
                                     and reference.type == discord.MessageReferenceType.default) else None
-    text = re.sub(r'<a?:[A-Za-z0-9_]+:[0-9]+>', '', message.content)
+    text = spoken_text(message)
     return (any(user.id == bot_id for user in message.mentions)
             or (name_trigger and any(re.search(r'(?<!\w)' + re.escape(name) + r'(?!\w)', text, re.IGNORECASE)
                                      for name in (character_name, *nicknames)))
@@ -672,7 +672,11 @@ class Hearthling(discord.Client):
                         'from this request, a visible profile picture or a supplied link. Server members may request these uploads when offered; '
                         'this is not permission for any other administration. Ask for an image or a name if unclear. '
                          'Use generate_image when the current speaker requests new artwork. For requests to find, fetch or show existing pictures '
+                         'use the search tools. Use generate_gif for requested new animated artwork, or make_gif to animate an existing '
+                         'picture with zoom, shake or spin, or turn a video clip into a GIF. For existing pictures '
                          'from websites, use image_search or web_fetch and then post_image for each requested image, with its original source_url. '
+                          'For a request to embed or play a social link, use post_media with url. Report whether it delivered a video, '
+                          'image or only a fallback link; a thumbnail is not a playable video. '
                           'Post images only when requested by the current speaker or when the shared random image roll explicitly selects you below. '
                           'post_image uploads the actual original file in this conversation; '
                          'report a picture as posted only after that tool succeeds. '
@@ -686,10 +690,15 @@ class Hearthling(discord.Client):
                         'the speaker explicitly demands that has no positive phrasing. '
                         'Images attached to or visibly linked in the request, '
                         'and readable images in the replied-to message, are sent to the provider automatically as source references. '
+                        'Image sources also follow the reply chain through your replies and this speaker\'s messages. '
+                        'Use image_reference_context for the original image request and apply the speaker\'s latest corrections; '
+                        'continue the requested edit with generate_image instead of asking for an image already supplied in that chain. '
+                        'Keep the requested scene and pose when correcting an edit. Report a provider rejection as the result of that attempt, '
+                        'rather than claiming the image was missing or predicting that every future attempt will fail. '
                         'Base a requested person\'s appearance on their saved appearance facts, never on their profile picture; use an avatar only '
                         'when the speaker explicitly asks for the avatar itself. List every depicted person in generate_image subjects using their Discord ID '
                         'or exact character name, so the tool can compose their complete saved appearance. The selected image provider returns an actual image '
-                    'which is attached automatically. Make at most one generate_image call for each message; the saved queue handles confirmed retries. '
+                     'which is attached automatically. Make at most one generate_image or generate_gif call for each message; the saved queue handles confirmed retries. '
                     'If queued=true, leave the notice to the saved queue. Otherwise, if rejected, quote the actual tool error briefly in your own character voice; do not invent a reason, '
                       'a picture, a download link or a retry. '
                      'web_search uses Brave for current information and explicit web searches. Use a focused query, '
@@ -779,7 +788,12 @@ class Hearthling(discord.Client):
         extra_tool = self.features.tool(request) if not automatic else None
         if extra_tool:
             tools.append(extra_tool)
-        can_picture = bool(extra_tool) and bool({'generate_image', 'post_image'} & set(extra_tool['function']['parameters']['properties']['action']['enum']))
+            if 'post_media' in extra_tool['function']['parameters']['properties']['action']['enum']:
+                from media import MEDIA_TOOL
+                tools.append(MEDIA_TOOL)
+        tool_names = {tool['function']['name'] for tool in tools}
+        feature_actions = set(extra_tool['function']['parameters']['properties']['action']['enum']) if extra_tool else set()
+        can_picture = bool({'generate_image', 'generate_gif', 'make_gif', 'post_image'} & feature_actions)
         pictured, note = False, []
         if preview:
             return {'messages': json.loads(self.features.redact(json.dumps(messages + turn))), 'tools': tools,
@@ -817,13 +831,34 @@ class Hearthling(discord.Client):
                 for call in answer.tool_calls:
                     if stopped or calls_used >= MAX_TOOL_CALLS:
                         result = {'ok': False, 'error': 'Actions are stopped for this request; report the recorded results.'}
-                    elif call.function.name not in {tool['function']['name'] for tool in tools}:
+                    elif call.function.name not in tool_names and call.function.name in feature_actions:
+                        # Some models call an offered action directly instead of using feature_tool.
+                        try:
+                            arguments = json.loads(call.function.arguments)
+                            if not isinstance(arguments, dict) or arguments.get('action', call.function.name) != call.function.name:
+                                raise ValueError('Use a JSON object with an action matching the function name.')
+                            arguments['action'] = call.function.name
+                        except ValueError as exc:
+                            result = {'ok': False, 'error': self.features.clean_error(exc)}
+                        else:
+                            result = await self.execute(json.dumps(arguments), request, tool='feature_tool', memory_epoch=memory_epoch)
+                    elif call.function.name not in tool_names:
                         result = {'ok': False, 'error': 'Unknown tool.'}
                     elif call.function.name == 'feature_tool':
                         result = await self.execute(call.function.arguments, request, tool='feature_tool', memory_epoch=memory_epoch)
+                    elif call.function.name == 'post_media':
+                        try:
+                            arguments = json.loads(call.function.arguments)
+                            if not isinstance(arguments, dict) or set(arguments) != {'url'}:
+                                raise ValueError('post_media requires only a url.')
+                            arguments['action'] = 'post_media'
+                            result = await self.execute(json.dumps(arguments), request, tool='feature_tool', memory_epoch=memory_epoch)
+                        except ValueError:
+                            result = {'ok': False, 'error': 'post_media requires a JSON object containing only url.'}
                     else:
                         result = await self.execute(call.function.arguments, request)
-                    pictured = pictured or result.get('action') in {'generate_image', 'post_image'}
+                    pictured = (pictured or result.get('action') in {'generate_image', 'generate_gif', 'make_gif', 'post_image'}
+                                or (result.get('action') == 'post_media' and result.get('result', {}).get('media_uploaded', False)))
                     calls_used += 1
                     stopped = stopped or bool(result.get('queued') or result.get('outcome_may_be_uncertain') or result.get('result', {}).get('stopped_because'))
                     turn.append({'role': 'tool', 'tool_call_id': call.id, 'content': json.dumps(result)})

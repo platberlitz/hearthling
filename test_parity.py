@@ -23,7 +23,8 @@ from features import FeatureAction
 from hearthling import APPLICATION_ID, Hearthling, OWNER_ID, SERVER_ID, open_database
 from images import IMAGE_STYLE, ImageSpec, download_image, extension, image_request
 import launcher
-from maintenance import export_profile, import_profile, inspect_release, release_archive
+import maintenance
+from maintenance import declared_files, export_profile, github_release, import_profile, inspect_release, installed_commit, release_archive
 from providers import Providers, ProviderSpec, build_request, normalise, strip_prefill, with_prefill, yaml_object
 from test_features import PNG, http_session, request
 from test_hearthling import ai_reply, expect_async_error, expect_error
@@ -291,6 +292,15 @@ async def main():
                 assert (await web.post('/api/timezones', headers=headers, json={'author_id': str(OWNER_ID), 'zone': ''})).status == 200
                 assert bot.social.zone(OWNER_ID) == bot.features.settings.timezone
                 assert (await web.post('/api/characters/preview', headers=headers, json={'markdown': CHARACTER, 'username': 'actual_user'})).status == 200
+                card_upload = {'content': base64.b64encode(json.dumps({'name': 'Imported', 'description': 'A gardener.'}).encode()).decode()}
+                response = await web.post('/api/characters/import', headers=headers, json=card_upload)
+                assert response.status == 200, await response.text()
+                imported = (await response.json())['character']
+                assert not any(item['name'] == 'Imported' for item in bot.characters.list())
+                assert (await web.post('/api/characters', headers=headers, json=imported)).status == 200
+                assert any(item['name'] == 'Imported' for item in bot.characters.list())
+                assert (await web.post('/api/characters/import', headers=headers, json={'content': '!bad'})).status == 400
+                assert (await web.post('/api/characters/import', headers={'Origin': 'https://elsewhere.test'}, json=card_upload)).status == 403
                 assert (await web.post('/api/characters/activate', headers=headers, json={'name': ''})).status == 200
                 assert bot.character_name == 'Hearthling'
                 assert (await web.post('/api/providers', headers=headers, json=provider)).status == 200
@@ -336,6 +346,7 @@ async def main():
                     staged = await dashboard.maintenance.stage(archive)
                 assert 'test_parity.py' in staged['checks_passed'] and dashboard.maintenance.status()['staged']['id'] == identity
                 assert 'test_memories.py' in staged['checks_passed']
+                await update_checks(dashboard, contents, process)
         db.close()
 
         releases = root / 'launcher-releases'
@@ -350,7 +361,69 @@ async def main():
             with patch('launcher.subprocess.Popen', side_effect=[first, second]):
                 assert launcher.main() == 0
             assert launcher.read('status.json')['ok'] is False and not (releases / 'pending.json').exists()
-    print('PASS: character sections/lore/scopes, four provider formats and fallback, private headers, image profiles, slash controls, profile import, diagnostics, protected APIs and release validation/rollback.')
+    print('PASS: character sections/lore/scopes, four provider formats and fallback, private headers, image profiles, slash controls, profile import, diagnostics, protected APIs, release validation/rollback and GitHub updates.')
+
+
+async def update_checks(dashboard, contents, process):
+    """Exercise the GitHub updater without touching the network."""
+    assert declared_files(contents['maintenance.py']) == maintenance.RELEASE_FILES
+    assert declared_files(b"RELEASE_FILES = {'hearthling.py', '../x'}") is None
+    added = contents['maintenance.py'].replace(b"'web_sources.py',", b"'web_sources.py', 'brand_new.py',", 1)
+    source = io.BytesIO()
+    with zipfile.ZipFile(source, 'w') as archive:
+        for name, raw in contents.items():
+            archive.writestr('hearthling-' + 'b' * 40 + '/' + name, added if name == 'maintenance.py' else raw)
+        archive.writestr('hearthling-' + 'b' * 40 + '/brand_new.py', 'VALUE = 1\n')
+        archive.writestr('hearthling-' + 'b' * 40 + '/.gitignore', 'data/\n')
+        archive.writestr('hearthling-' + 'b' * 40 + '/assets/screenshots/overview.png', PNG)
+    packed = github_release(source.getvalue())
+    identity, unpacked = inspect_release(packed)
+    assert 'brand_new.py' in unpacked and '.gitignore' not in unpacked and 'overview.png' not in unpacked
+    expect_error(ValueError, lambda: github_release(b'not a zip'))
+
+    with tempfile.TemporaryDirectory() as folder:
+        git = Path(folder) / '.git'
+        (git / 'refs' / 'heads').mkdir(parents=True)
+        (git / 'HEAD').write_text('ref: refs/heads/main\n')
+        (git / 'packed-refs').write_text('# pack-refs\n' + 'c' * 40 + ' refs/heads/main\n')
+        assert installed_commit(Path(folder)) == 'c' * 40
+        (git / 'refs' / 'heads' / 'main').write_text('d' * 40 + '\n')
+        assert installed_commit(Path(folder)) == 'd' * 40
+        assert installed_commit(Path(folder) / 'missing') is None
+
+    old, new = 'a' * 40, 'b' * 40
+    calls = []
+    async def github(url, *, binary=False):
+        calls.append(url)
+        if binary:
+            assert url == f'https://codeload.github.com/platberlitz/hearthling/zip/{new}'
+            return source.getvalue()
+        if '/compare/' in url:
+            return {'status': 'ahead', 'ahead_by': 2, 'commits': [{'sha': 'e' * 40, 'commit': {'message': 'Older change'}},
+                                                                   {'sha': new, 'commit': {'message': 'Newest change\n\nDetails'}}]}
+        return {'sha': new, 'commit': {'message': 'Newest change\n\nDetails', 'committer': {'date': '2026-11-03T02:00:28Z'}}}
+    work = dashboard.maintenance
+    work.update_cache = None
+    with patch('maintenance.github_request', new=github), patch('maintenance.installed_commit', return_value=old), \
+            patch('asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)):
+        info = await work.check_update()
+        assert info['status'] == 'available' and info['behind_by'] == 2 and info['latest_message'] == 'Newest change'
+        assert [item['message'] for item in info['changes']] == ['Newest change', 'Older change']
+        assert await work.check_update() is info and len(calls) == 2
+        staged = await work.download_update()
+        assert staged['commit'] == new and staged['id'] == identity and work.status()['staged']['commit'] == new
+        assert work.read('commits.json')[identity] == new
+        with patch.dict('os.environ', {'HEARTHLING_RELEASE': identity}):
+            assert work.current_commit() == new
+            async def latest(url, *, binary=False):
+                return {'sha': new, 'commit': {'message': 'Newest change'}}
+            with patch('maintenance.github_request', new=latest):
+                assert (await work.check_update(refresh=True))['status'] == 'current'
+                await expect_async_error(ValueError, work.download_update())
+    async def limited(url, *, binary=False):
+        raise ValueError('GitHub is limiting update checks from this server right now. Try again in an hour.')
+    with patch('maintenance.github_request', new=limited):
+        await expect_async_error(ValueError, work.check_update(refresh=True))
 
 
 if __name__ == '__main__':

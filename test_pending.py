@@ -136,6 +136,32 @@ async def main():
                     perform.assert_not_awaited()
 
                 edited = message()
+                # Restart repairs both the image state and its unfinished action receipt.
+                for initial in ('preparing', 'retryable', 'pending', 'uncertain', 'complete', 'partial_file'):
+                    recovering = message()
+                    async with bot.features.image_lock:
+                        await bot.execute(args, recovering, tool='feature_tool')
+                    identity = str(recovering.id)
+                    db.execute("INSERT INTO pictures (request_id,author_id,channel_id,created_at,state) VALUES (?,?,?,0,?)",
+                               (identity, str(GUEST_ID), str(CHANNEL_ID), 'preparing' if initial == 'partial_file' else initial))
+                    db.execute('UPDATE actions SET result=NULL WHERE request_id=?', (identity,))
+                    if initial == 'partial_file':
+                        (bot.features.data_dir / 'pictures' / f'hearthling-{identity}.png').write_bytes(b'partial')
+                    elif initial == 'complete':
+                        filename = f'hearthling-{identity}.png'
+                        (bot.features.data_dir / 'pictures' / filename).write_bytes(PNG)
+                        db.execute('UPDATE pictures SET filename=? WHERE request_id=?', (filename, identity))
+                    db.commit()
+                    async with bot.features.image_lock:
+                        bot.social.queue.recover()
+                        assert db.execute('SELECT result FROM actions WHERE request_id=?', (identity,)).fetchone()[0] is None
+                    bot.social.queue.recover()
+                    client = http_session(payload)
+                    with patch('features.aiohttp.ClientSession', return_value=client):
+                        await tick()
+                    assert client.post.call_count == (1 if initial in {'preparing', 'retryable'} else 0)
+                    assert state(recovering) == 'complete', (initial, db.execute('SELECT state,result FROM request_queue WHERE request_id=?', (identity,)).fetchall())
+
                 bot.social.queue.add(edited)
                 edited.content += ' Actually, never mind.'
                 await tick()

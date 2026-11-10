@@ -17,6 +17,7 @@ Members can talk to it. Server administration stays with you.
 - **Pictures and search.** Generate or edit images, search with Brave and read public web pages.
 - **Everyday server tools.** Reminders, personal role colours, emojis and stickers. Moderation is owner-only.
 - **Optional scheduled posts.** GitHub releases, RSS roundups, conversation starters and daily Wordle.
+- **One-click updates.** Check GitHub for a newer version from the dashboard and install it, with automatic rollback if it won't start.
 
 Extra accounts default to **Chatbot** mode: conversation and memories. Switch one to **Assistant** when you want it to use practical tools too.
 
@@ -81,7 +82,7 @@ Hearthling, draw a cosy reading nook.
 Hearthling, change my personal role colour to #b873e8.
 ```
 
-Spontaneous replies have a small default chance. Set **Quiet channels** in Automation wherever you'd rather it wait to be addressed.
+Spontaneous replies have a small default chance. Set **Quiet channels** in Automation wherever you'd rather it wait to be addressed. There's also an optional **Random states** switch: once an hour, at 0.05%, a bot falls into a random mood and posts one short message about it, never as a reply.
 
 ## More detail, when you need it
 

@@ -167,6 +167,7 @@ class BotManager:
                 db.commit()
                 settings = primary.features.settings.model_dump() | {'personality': bot.personality, 'active_character': '',
                     'spontaneous_enabled': False, 'spontaneous_channels': [], 'dm_followups_enabled': False,
+                    'random_state_enabled': False, 'random_state_channels': [],
                     'releases_enabled': False, 'releases_channel': '',
                     'news_enabled': False, 'news_channel': '',
                     'bot_mode': data.bot_mode or 'assistant'}

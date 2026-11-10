@@ -21,6 +21,8 @@ import wordle
 # One shared roll per human message across every managed bot; a hit lets one of them reply unprompted.
 RANDOM_REPLY_CHANCE = 0.001
 RANDOM_IMAGE_CHANCE = 0.0003
+# One shared roll per hour across every managed bot; the winner posts one unprompted message in a random state.
+RANDOM_STATE_CHANCE = 0.05
 
 
 class ChannelRule(BaseModel):
@@ -71,6 +73,15 @@ class SocialOptions(BaseModel):
     spontaneous_max_minutes: int = Field(default=180, ge=1, le=10080)
     spontaneous_silence_minutes: int = Field(default=5, ge=0, le=1440)
     spontaneous_prompt: str = Field(default='Start a short, natural conversation in your own character. Do not pretend somebody asked you a question.', max_length=4000)
+    random_state_enabled: bool = False
+    random_state_channels: list[str] = Field(default_factory=list, max_length=50)
+    random_state_silence_minutes: int = Field(default=30, ge=0, le=1440)
+    random_state_prompt: str = Field(
+        default='You have suddenly found yourself in a random unusual state or mood that fits your character; choose one yourself, '
+                'for example very drunk, hopelessly sleepy, absurdly hyper, weirdly emotional or heartbroken over a game. '
+                'Post one short, natural message in your own character that shows it. '
+                'Do not pretend somebody asked you a question and do not reply to anyone directly.',
+        max_length=4000)
     timezone: str = Field(default='UTC', max_length=100)
     unavailable_windows: list[QuietWindow] = Field(default_factory=list, max_length=30)
     reminders_enabled: bool = True
@@ -114,7 +125,7 @@ class SocialOptions(BaseModel):
             raise ValueError('Use an IANA timezone such as Europe/London or Asia/Manila.') from None
         return value
 
-    @field_validator('channel_whitelist', 'channel_blacklist', 'ignored_users', 'dm_blacklist', 'spontaneous_channels', 'quiet_channels')
+    @field_validator('channel_whitelist', 'channel_blacklist', 'ignored_users', 'dm_blacklist', 'spontaneous_channels', 'quiet_channels', 'random_state_channels')
     @classmethod
     def discord_ids(cls, value):
         if any(not re.fullmatch(r'[0-9]{15,21}', item) for item in value):
@@ -147,6 +158,8 @@ class SocialOptions(BaseModel):
             raise ValueError('The maximum random-message interval must be at least the minimum.')
         if self.spontaneous_enabled and not self.spontaneous_channels:
             raise ValueError('Choose at least one channel before enabling random messages.')
+        if self.random_state_enabled and not self.random_state_channels:
+            raise ValueError('Choose at least one channel before enabling the random state roll.')
         if self.wordle_enabled and not self.wordle_channel:
             raise ValueError('Choose a Wordle channel before enabling the daily game.')
         if self.releases_enabled and not (self.releases_channel and self.releases_repositories):
@@ -577,6 +590,8 @@ class Social:
                 channel = self.bot.get_channel(int(identity))
                 if channel and getattr(channel, 'guild', None) and channel.guild.id == self.bot.server_id:
                     await self.speak(channel, self.config.spontaneous_prompt)
+        if self.config.random_state_enabled and not self.config.server_paused:
+            await self.random_state_tick(now)
         if self.config.wordle_enabled and self.config.wordle_channel and not self.config.server_paused:
             local = datetime.fromtimestamp(now, ZoneInfo(self.config.timezone))
             if local.strftime('%H:%M') >= self.config.wordle_time:
@@ -606,6 +621,46 @@ class Social:
                 self.db.commit()
                 await self.speak(channel, 'Send a brief, natural follow-up after this conversation went quiet. Do not claim an event or promise not supported by the context.',
                                  person=person, kind='dm_followup', picture=self.config.dm_followup_images and random.random() * 100 < self.config.dm_followup_image_chance)
+
+    async def random_state_tick(self, now):
+        """One shared hourly roll across bots; the winner posts one unprompted message in a random state."""
+        bucket = datetime.fromtimestamp(now, timezone.utc).strftime('%Y%m%d%H')
+        if self.state('random-state:' + bucket) is not None:
+            return
+        roll = random.Random(f'random-state:{self.bot.server_id}:{bucket}')
+        if roll.random() * 100 >= RANDOM_STATE_CHANCE:
+            return
+        manager = getattr(self.bot, 'manager', None)
+        candidates = []
+        for bot in (manager.bots.values() if manager else (self.bot,)):
+            social = getattr(bot, 'social', None)
+            config = getattr(social, 'config', None) if social else None
+            if (bot.server_id == self.bot.server_id and getattr(bot, 'accepting_messages', True)
+                    and config and config.random_state_enabled and config.random_state_channels
+                    and social.available(now)):
+                candidates.append(int(bot.bot_id))
+        candidates.sort()
+        if not candidates or roll.choice(candidates) != self.bot.bot_id:
+            return
+        eligible = []
+        for identity in self.config.random_state_channels:
+            channel = self.bot.get_channel(int(identity))
+            if not channel or getattr(channel, 'guild', None) is None or channel.guild.id != self.bot.server_id:
+                continue
+            last = self.db.execute('SELECT max(last_in) FROM activity WHERE channel_id=?', (identity,)).fetchone()[0] or 0
+            if now - last >= self.config.random_state_silence_minutes * 60:
+                eligible.append(channel)
+        if not eligible:
+            return
+        channel = random.choice(eligible)
+        # Persist the win before sending so a restart cannot multiply posts within the same hour.
+        self.save_state('random-state:' + bucket, str(channel.id))
+        try:
+            await self.speak(channel, self.config.random_state_prompt, kind='random state')
+        except Exception:
+            self.db.execute('DELETE FROM social_state WHERE name=?', ('random-state:' + bucket,))
+            self.db.commit()
+            raise
 
     def start(self):
         if self.task is None or self.task.done():

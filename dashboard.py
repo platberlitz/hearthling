@@ -1,5 +1,7 @@
 """Owner-only settings served on localhost, behind the existing HTTPS proxy."""
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -20,7 +22,7 @@ from openai import APIError
 from pydantic import BaseModel, ConfigDict, Field
 
 from features import FeatureError, Settings, host_status, write_private_json
-from characters import CharacterInput, LoreInput, parse_character
+from characters import CharacterInput, LoreInput, import_card, parse_character
 from images import BUILTIN_IMAGE_MODELS, ImageSpec
 from maintenance import Maintenance, diagnostics, export_profile, import_profile, release_archive, reload_bot, MAX_RELEASE
 
@@ -83,6 +85,7 @@ class Dashboard:
             web.post('/api/check/{kind}', self.check), web.get('/api/pictures/{identity}', self.picture),
             web.post('/api/bots', self.add_bot), web.post('/api/bots/{identity}', self.update_bot),
             web.get('/api/characters', self.characters), web.post('/api/characters', self.save_character),
+            web.post('/api/characters/import', self.import_character),
             web.post('/api/characters/activate', self.activate_character), web.post('/api/characters/preview', self.preview_character),
             web.delete('/api/characters/{name}', self.delete_character),
             web.get('/api/lore', self.lore), web.post('/api/lore', self.save_lore), web.delete('/api/lore/{identity}', self.delete_lore),
@@ -98,22 +101,24 @@ class Dashboard:
             web.get('/api/export', self.export), web.post('/api/import', self.import_data),
             web.get('/api/maintenance', self.maintenance_status), web.post('/api/maintenance/{action}', self.maintain),
             web.get('/api/release', self.export_release), web.post('/api/release', self.stage_release),
+            web.get('/api/update', self.check_update), web.post('/api/update', self.install_update),
         ])
 
     @web.middleware
     async def guard(self, request, handler):
         try:
             if request.method not in {'GET', 'HEAD'}:
+                max_body = 22 * 1024 * 1024 if request.path == '/api/characters/import' else 2 * 1024 * 1024
                 if request.path != '/api/release':
-                    request = request.clone(client_max_size=2 * 1024 * 1024)
+                    request = request.clone(client_max_size=max_body)
                 if request.headers.get('Origin') != self.origin:
                     raise web.HTTPForbidden(reason='Open this dashboard from its own address before making changes.')
                 if request.path == '/api/release' and request.content_type == 'application/zip':
                     pass
                 elif request.content_type != 'application/json':
                     raise web.HTTPUnsupportedMediaType(reason='Send changes as JSON.')
-                if request.path != '/api/release' and request.content_length and request.content_length > 2 * 1024 * 1024:
-                    raise web.HTTPRequestEntityTooLarge(max_size=2 * 1024 * 1024, actual_size=request.content_length)
+                if request.path != '/api/release' and request.content_length and request.content_length > max_body:
+                    raise web.HTTPRequestEntityTooLarge(max_size=max_body, actual_size=request.content_length)
             public = {'/', '/dashboard.css', '/dashboard.js', '/dashboard-extra.js', '/avatar.png', '/health',
                       '/api/login', '/api/request-link'}
             if request.path not in public:
@@ -412,6 +417,20 @@ class Dashboard:
     async def save_character(self, request):
         return web.json_response(self.bot_for(request).characters.save(await request.json()))
 
+    async def import_character(self, request):
+        bot = self.bot_for(request)
+        data = await request.json()
+        if not isinstance(data, dict) or not isinstance(data.get('content'), str):
+            raise ValueError('Choose a PNG or JSON character card.')
+        try:
+            content = base64.b64decode(data['content'], validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError('The uploaded card could not be decoded.') from exc
+        character = import_card(content)
+        if bot.features.redact(character['markdown']) != character['markdown']:
+            raise ValueError('Character cards must not contain saved credentials or private sign-in links.')
+        return web.json_response({'character': character})
+
     async def preview_character(self, request):
         data = await request.json()
         if not isinstance(data, dict) or not isinstance(data.get('username', ''), str):
@@ -591,6 +610,12 @@ class Dashboard:
 
     async def stage_release(self, request):
         return web.json_response(await self.maintenance.stage(await request.read()))
+
+    async def check_update(self, request):
+        return web.json_response(await self.maintenance.check_update(refresh=request.query.get('refresh') == '1'))
+
+    async def install_update(self, request):
+        return web.json_response(await self.maintenance.download_update())
 
     async def start(self):
         self.runner = web.AppRunner(self.app, access_log=None)

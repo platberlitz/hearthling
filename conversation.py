@@ -6,6 +6,18 @@ from urllib.parse import urlsplit
 import discord
 
 
+def spoken_text(message):
+    """Only conversational text can trigger a character's name, never media names."""
+    text = re.sub(r'https?://[^\s<>]+', '', message.content, flags=re.I)
+    text = re.sub(r'<a?:[A-Za-z0-9_]+:[0-9]+>', '', text)
+    for attachment in getattr(message, 'attachments', []) or []:
+        filename = getattr(attachment, 'filename', None)
+        if isinstance(filename, str) and filename:
+            text = re.sub(re.escape(filename), '', text, flags=re.I)
+    # Also cover filenames pasted as text, including Markdown link labels.
+    return re.sub(r'''[^\s<>`"'()\[\]{}|]+\.[A-Za-z0-9]{1,10}(?=$|[\s<>`"'()\[\]{}|.,;!?])''', '', text)
+
+
 def image_url(value):
     if not isinstance(value, str) or len(value) > 4096:
         return None
@@ -58,8 +70,8 @@ def message_images(message, label):
     return images[:8]
 
 
-async def resolved_reply(request):
-    reference = getattr(request, 'reference', None)
+async def resolved_reply(request, *, source=None):
+    reference = getattr(source if source is not None else request, 'reference', None)
     if not (reference and reference.message_id and reference.channel_id == request.channel.id
             and reference.type == discord.MessageReferenceType.default):
         return None
@@ -77,6 +89,31 @@ async def resolved_reply(request):
     return None
 
 
+async def image_sources(bot, request):
+    """Keep a reply's image source through this bot's conversation with its requester."""
+    sources = [request]
+    replied = await resolved_reply(request)
+    if replied is None:
+        return sources
+    sources.append(replied)
+    if any(message_images(message, 'Source') for message in sources):
+        return sources
+    cutoff = bot.characters.history_after(request.author.id, request.channel.id)
+    seen = {message.id for message in sources}
+    for _ in range(6):
+        if replied.id <= cutoff or replied.author.id not in {request.author.id, bot.bot_id}:
+            break
+        earlier = await resolved_reply(request, source=replied)
+        if earlier is None or earlier.id in seen or earlier.id <= cutoff:
+            break
+        seen.add(earlier.id)
+        sources.append(earlier)
+        if message_images(earlier, 'Source'):
+            break
+        replied = earlier
+    return sources
+
+
 async def message_content(bot, request):
     config = bot.features.settings
     history_after = bot.characters.history_after(request.author.id, request.channel.id)
@@ -91,6 +128,7 @@ async def message_content(bot, request):
     for user in (getattr(request, 'mentions', []) or [])[:config.mention_context_max]:
         item = profile(user)
         profiles.setdefault(item['id'], item)
+    sources = await image_sources(bot, request)
     images = message_images(request, 'Current message')
     reference = request.reference
     if (reference and reference.message_id and reference.channel_id == request.channel.id
@@ -98,7 +136,7 @@ async def message_content(bot, request):
         content['replying_to'] = {'message_id': str(reference.message_id), 'unavailable': True}
         permissions = request.channel.permissions_for(request.author) if request.guild else None
         if permissions is None or (permissions.view_channel and permissions.read_message_history):
-            replied = await resolved_reply(request)
+            replied = sources[1] if len(sources) > 1 else None
             if replied is not None:
                 item = profile(replied.author)
                 profiles.setdefault(item['id'], item)
@@ -108,6 +146,12 @@ async def message_content(bot, request):
                 if config.reply_context_style == 'legacy':
                     content['replying_to']['legacy_quote'] = f'{replied.author.display_name}: {replied.content[:4000]}'
                 images.extend(message_images(replied, 'Referenced message'))
+    for source in sources[2:]:
+        images.extend(message_images(source, 'Earlier referenced message'))
+    if len(sources) > 2 and images:
+        content['image_reference_context'] = [
+            {'message_id': str(source.id), 'message': source.content[:4000]}
+            for source in reversed(sources[1:]) if not source.author.bot]
     content['visible_people'] = list(profiles.values())
     if request.guild:
         permissions = request.channel.permissions_for(request.author) if callable(getattr(request.channel, 'permissions_for', None)) else None

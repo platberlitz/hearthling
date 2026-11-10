@@ -14,7 +14,7 @@ from providers import connection_url
 
 BUILTIN_IMAGE_MODELS = {'default': 'gpt-image-1'}
 IMAGE_STYLE = 'anime style, cel-shaded, flat colors, clean wordless artwork'
-IMAGE_MIME = {'png': 'image/png', 'jpg': 'image/jpeg', 'webp': 'image/webp'}
+IMAGE_MIME = {'png': 'image/png', 'jpg': 'image/jpeg', 'webp': 'image/webp', 'gif': 'image/gif'}
 GEMINI_ASPECT = {'1024x1024': '1:1', '1024x1536': '2:3', '1536x1024': '3:2'}
 
 
@@ -24,6 +24,18 @@ def styled(prompt, art_style=None, house_style=IMAGE_STYLE):
     return f'{prompt}, {style}' if style else prompt
 
 
+def reference_prompt(prompt, request_text, reply_text=''):
+    return ('Use the supplied reference images as the visual source of truth. '
+            'Apply the current human request directly to those images. Preserve their scene, '
+            'composition, spatial relationships and poses except where the human requests a change. '
+            'The current request takes priority over saved default appearances for temporary transformations. '
+            'Treat the prepared notes as secondary character guidance; resolve any conflicting scene '
+            'description in favour of the actual reference images and the human request.\n\n'
+            f'Current human request:\n{request_text}\n\n'
+            + (f'Replied-to message context:\n{reply_text}\n\n' if reply_text else '')
+            + f'Prepared notes:\n{prompt}')
+
+
 def prompt_messages(prompt, limit=1900):
     """Discord messages quoting the exact prompt sent to the image provider."""
     # A zero-width space keeps a literal ``` inside the prompt from closing the code block.
@@ -31,6 +43,21 @@ def prompt_messages(prompt, limit=1900):
     chunks = [text[start:start + limit] for start in range(0, len(text), limit)]
     return [('Prompt sent to the image model:\n' if index == 0 else '') + f'```\n{chunk}\n```'
             for index, chunk in enumerate(chunks)]
+
+
+def key_alternatives(features, spec, key):
+    """Keep shared Smolproxy keys on Smolproxy connections, configured key first."""
+    host = urlsplit(spec.base_url).hostname or ''
+    if spec.id not in BUILTIN_IMAGE_MODELS and not (host == 'smolproxy.org' or host.endswith('.smolproxy.org')):
+        return [key]
+    # Shared keys belong to the default connection, which may use a different service.
+    shared = features.credentials.get('image_fallback_keys', [])
+    if spec.id not in BUILTIN_IMAGE_MODELS:
+        default_host = urlsplit(features.settings.image_base_url or features.settings.ai_base_url).hostname or ''
+        if not (default_host == 'smolproxy.org' or default_host.endswith('.smolproxy.org')):
+            return [key]
+        shared = [features.credentials.get('image_api_key') or features.credentials.get('ai_api_key'), *shared]
+    return list(dict.fromkeys(value for value in [key, *shared] if value)) or [key]
 
 
 class ImageSpec(BaseModel):
@@ -107,7 +134,7 @@ def selected(features, preferred=None):
     return spec, key
 
 
-def image_request(spec, prompt, size=None, references=None, art_style=None, house_style=IMAGE_STYLE):
+def image_request(spec, prompt, size=None, references=None, art_style=None, house_style=IMAGE_STYLE, *, animation=None):
     prompt = styled(prompt, art_style, house_style)
     options = {'model': spec.model, 'quality': spec.quality, 'size': size or spec.size}
     for name in ('style', 'background', 'moderation'):
@@ -115,6 +142,8 @@ def image_request(spec, prompt, size=None, references=None, art_style=None, hous
             options[name] = value
     if spec.output_format != 'png':
         options['output_format'] = spec.output_format
+    if animation:
+        options.update(animation)
     references = list(references or [])
     if spec.family == 'responses':
         content = [{'type': 'input_text', 'text': prompt}]
@@ -123,7 +152,7 @@ def image_request(spec, prompt, size=None, references=None, art_style=None, hous
             content.append({'type': 'input_image', 'image_url': f'data:{mime};base64,{base64.b64encode(raw).decode()}',
                             'detail': 'high'})
         return {'model': spec.coordinator_model, 'input': [{'role': 'user', 'content': content}],
-                'tools': [{'type': 'image_generation', **options, 'action': 'edit' if references else 'generate'}],
+                'tools': [{'type': 'image_generation', **options, 'action': 'edit' if references and not animation else 'generate'}],
                 'tool_choice': {'type': 'image_generation'}, **spec.extra_body}
     if spec.family == 'gemini':
         parts = [{'text': prompt}] + [{'inline_data': {'mime_type': IMAGE_MIME[extension(raw)], 'data': base64.b64encode(raw).decode()}}
@@ -220,6 +249,8 @@ def gemini_picture(data):
 
 
 def extension(raw):
+    if raw.startswith((b'GIF87a', b'GIF89a')):
+        return 'gif'
     if raw.startswith(b'\x89PNG\r\n\x1a\n'):
         return 'png'
     if raw.startswith(b'\xff\xd8\xff'):

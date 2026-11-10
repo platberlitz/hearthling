@@ -1,10 +1,14 @@
 """Editable character documents and deliberately scoped manual lore."""
+import base64
+import binascii
+import io
 import json
 import re
 import time
 import uuid
 
 import discord
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -20,6 +24,61 @@ class CharacterInput(BaseModel):
         if not value.strip() or any(ord(char) < 32 or char in '<>@' for char in value):
             raise ValueError('Use a plain character name without mentions or line breaks.')
         return value.strip()
+
+
+def import_card(content):
+    """Convert a SillyTavern PNG or V1/V2/V3 JSON card into an editable preset."""
+    if not content or len(content) > 15 * 1024 * 1024:
+        raise ValueError('Choose a character card smaller than 15 MB.')
+    try:
+        if content.startswith(b'\x89PNG\r\n\x1a\n'):
+            with Image.open(io.BytesIO(content)) as image:
+                encoded = image.text.get('ccv3') or image.text.get('chara')
+            if not encoded:
+                raise ValueError('This PNG has no SillyTavern character data.')
+            content = base64.b64decode(encoded, validate=True)
+        card = json.loads(content)
+    except (OSError, UnicodeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ValueError('Choose a valid SillyTavern PNG or JSON character card.') from exc
+    if not isinstance(card, dict):
+        raise ValueError('Character card data must be a JSON object.')
+    data = card.get('data') if card.get('spec') in ('chara_card_v2', 'chara_card_v3') else card
+    if not isinstance(data, dict):
+        raise ValueError('The character card is missing its data object.')
+
+    def text(key):
+        value = data.get(key, '')
+        if not isinstance(value, str):
+            raise ValueError(f'The card field {key} must contain text.')
+        return value.strip()
+
+    name = text('name')
+
+    def replace(value):
+        return re.sub(r'\{\{(char|user)\}\}', lambda match: name if match[1].lower() == 'char' else 'you', value, flags=re.I)
+
+    # Demote embedded headings so card text cannot escape its destination section.
+    def section(value):
+        value = re.sub(r'(?m)^(\s*)##(?=\s)', r'\1###', replace(value))
+        fence = None
+        for line in value.splitlines():
+            marker = re.match(r'^\s*(```+|~~~+)', line)
+            if marker:
+                fence = None if fence and fence[0] == marker[1][0] else fence or marker[1]
+        return value + ('\n' + fence if fence else '')
+
+    persona = '\n\n'.join(text(key) for key in ('scenario', 'description', 'personality') if text(key))
+    if not persona:
+        raise ValueError('The card needs a description, personality or scenario.')
+    markdown = f'## System Persona\n\n{section(persona)}\n\n## Example Dialogue\n\n{section(text("mes_example"))}'
+    details = {'name': name, 'creator': text('creator'), 'version': text('character_version'),
+               'tags': data.get('tags', []), 'first_mes': text('first_mes'),
+               'creator_notes': text('creator_notes'), 'system_prompt': text('system_prompt'),
+               'post_history_instructions': text('post_history_instructions'),
+               'alternate_greetings': data.get('alternate_greetings', []),
+               'character_book': data.get('character_book', {})}
+    markdown += '\n\n## Card details\n\n' + json.dumps(details, ensure_ascii=False, indent=2)
+    return CharacterInput(name=name, markdown=markdown).model_dump()
 
 
 class LoreInput(BaseModel):

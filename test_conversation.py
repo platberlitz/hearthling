@@ -15,7 +15,7 @@ import testenv  # noqa: F401
 from hearthling import APPLICATION_ID, OWNER_ID, SERVER_ID, Hearthling, open_database
 from conversation import image_url, message_content, model_reply, shared_history, text_only
 from test_hearthling import ai_reply
-from test_features import request
+from test_features import PNG, request
 
 
 async def shared_context():
@@ -215,12 +215,22 @@ async def main():
         assert 'unavailable' in text_only(messages)[0]['content']
         failure = BadRequestError('This model does not support image input',
                                   response=httpx.Response(400, request=httpx.Request('POST', 'https://example.test')), body=None)
-        create = AsyncMock(side_effect=[failure, ai_reply(content='I cannot inspect that image.'), ai_reply(content='Still text only.')])
+        create = AsyncMock(side_effect=[failure, ai_reply(content='I can inspect the image.')])
         bot.ai = NS(chat=NS(completions=NS(create=create)))
-        await model_reply(bot, messages, max_tokens=100)
-        assert create.await_count == 2 and isinstance(create.call_args.kwargs['messages'][0]['content'], str)
-        await model_reply(bot, messages, max_tokens=100)
-        assert create.await_count == 3 and isinstance(create.call_args.kwargs['messages'][0]['content'], str)
+        with patch('images.download_image', new=AsyncMock(return_value=PNG)):
+            try:
+                await model_reply(bot, messages, max_tokens=100)
+            except BadRequestError:
+                pass
+            else:
+                raise AssertionError('Image rejection must not silently retry without the picture.')
+            assert create.await_count == 1
+            await model_reply(bot, messages, max_tokens=100)
+        assert create.await_count == 2
+        sent_images = [part for part in create.call_args.kwargs['messages'][0]['content'] if part['type'] == 'image_url']
+        assert sent_images and all(part['image_url']['url'].startswith('data:image/png;base64,') for part in sent_images)
+        assert all(part['image_url']['url'].startswith('https://') for part in parts if part['type'] == 'image_url')
+        assert db.execute('SELECT error FROM provider_requests WHERE error IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()[0]
         message.content, message.reference = '', None
         message.guild = None
         message.channel.typing = MagicMock()

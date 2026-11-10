@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace as NS
 import tempfile
 from unittest.mock import AsyncMock, patch
 
@@ -115,6 +116,40 @@ async def picture_checks(root):
         assert str(OWNER_ID) not in prompt
         await bot.deliver(message, 'Here it is.', [])
         assert prompt in message.channel.send.call_args_list[-1].args[0]
+
+        # A text-only coordinator's invented scene must not replace an attached or replied-to source.
+        for attached in (True, False):
+            message.id += 1
+            message.content = 'Replace the cat in this picture with us as cartoon tigers. Keep the funny upside-down pose.'
+            source_url = 'https://cdn.discordapp.com/attachments/900000000000000001/900000000000000002/source.png'
+            attachment = NS(content_type='image/png', size=len(PNG), url=source_url, filename='source.png')
+            message.attachments = [attachment] if attached else []
+            replied = None if attached else NS(content='Use this photo.', attachments=[attachment], author=message.author)
+            session = http_session({'output': [{'type': 'image_generation_call', 'result': base64.b64encode(PNG).decode()}]})
+            with patch.object(bot.providers, 'reply', new=AsyncMock(side_effect=compose)) as coordinator, \
+                    patch('features.image_sources', new=AsyncMock(return_value=[message] + ([replied] if replied else []))), \
+                    patch('features.download_image', new=AsyncMock(return_value=PNG)) as download, \
+                    patch('features.aiohttp.ClientSession', return_value=session):
+                result = await bot.execute(args.model_dump_json(), message, tool='feature_tool')
+            assert result['ok'], result
+            download.assert_awaited_once_with(source_url, maximum=10 * 1024 * 1024)
+            source = json.loads(coordinator.call_args.args[0][1]['content'])
+            assert source['draft'] == message.content and 'reference_edit' in source
+            payload = session.post.call_args.kwargs['json']
+            parts = payload['input'][0]['content']
+            prompt = parts[0]['text']
+            assert message.content in prompt and 'sunny garden' not in prompt and 'green eyes' not in prompt
+            assert 'black eyes' in prompt and 'long bangs' in prompt
+            assert parts[1]['type'] == 'input_image'
+            assert base64.b64decode(parts[1]['image_url'].split(',', 1)[1]) == PNG
+            assert payload['tools'][0]['action'] == 'edit'
+            assert bot.features.picture_prompt(message.id) == prompt
+            if replied:
+                assert replied.content in prompt
+        message.attachments = []
+        # Without saved appearances, the invented draft is still discarded for reference edits.
+        assert await grounded_prompt(bot.features, FeatureAction(action='generate_image', prompt='A dog in a garden'),
+                                     request(), reference_edit=True) == ''
 
         # Mentioning the addressed bot in a teacup request does not insert that bot into the picture.
         message.id += 1

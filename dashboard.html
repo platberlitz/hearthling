@@ -102,10 +102,15 @@
           <label for="nicknames">Other names to answer to</label><textarea id="nicknames" data-setting="nicknames" data-type="lines" rows="2" aria-describedby="nicknames-help"></textarea><p id="nicknames-help" class="field-help">One name per line. Names inside Discord emoji do not trigger a reply.</p>
           <div class="form-footer"><button type="submit">Save personality</button><p class="form-status" role="status"></p></div>
         </form>
-        <details class="reference"><summary>Saved characters and Markdown presets</summary>
+        <details class="reference"><summary>Saved characters, SillyTavern imports and Markdown presets</summary>
           <p class="field-help">The default uses the instructions above. A selected preset supplies its own persona, examples and username-specific context.</p>
           <p id="character-active" class="field-help"></p><ul id="character-list" class="entity-list"></ul>
           <button type="button" id="new-character" class="secondary small">Add character</button>
+          <form id="character-import" class="extra-form inline-editor">
+            <label for="character-card-file">Import a SillyTavern character card</label><input id="character-card-file" type="file" accept=".png,.json,image/png,application/json" required>
+            <p class="field-help">PNG or JSON, up to 15 MB. Review the imported preset below, then save and activate it. Greetings, card instructions and lorebook data stay in Card details for reference.</p>
+            <div class="form-footer"><button type="submit" class="secondary">Import card</button><p class="form-status" role="status"></p></div>
+          </form>
           <form id="character-editor" class="extra-form inline-editor" hidden>
             <h3>Character preset</h3><label for="character-name">Name</label><input id="character-name" name="name" maxlength="50" required>
             <label for="character-provider">Preferred provider</label><select id="character-provider" name="provider" data-choices="providers"><option value="">Use the normal provider order</option></select>
@@ -301,6 +306,14 @@
             <label for="spontaneous-prompt">What to start a conversation about</label><textarea id="spontaneous-prompt" data-setting="spontaneous_prompt" rows="3" maxlength="2000" required></textarea>
           </fieldset><div class="form-footer"><button type="submit">Save random speech</button><p class="form-status" role="status"></p></div>
         </form>
+        <form id="random-state-form" class="settings-form">
+          <fieldset><legend>Random states</legend>
+            <div class="setting-row"><label for="random-state-enabled">Fall into a random state and post about it</label><input id="random-state-enabled" type="checkbox" data-setting="random_state_enabled"></div>
+            <label for="random-state-channels">Channels for random states</label><select id="random-state-channels" multiple size="4" data-setting="random_state_channels" data-choices="channels"></select><p class="field-help">Every hour all bots share one 0.05% roll and the winner posts one unprompted message in a random state, such as being very drunk or weirdly emotional, in one of these channels. It is never a reply, and nothing is posted when no chosen channel has had recent chat.</p>
+            <label for="random-state-silence">Wait for this many quiet minutes</label><input id="random-state-silence" type="number" min="0" max="1440" data-setting="random_state_silence_minutes" required>
+            <label for="random-state-prompt">The state to fall into</label><textarea id="random-state-prompt" data-setting="random_state_prompt" rows="3" maxlength="2000" required></textarea>
+          </fieldset><div class="form-footer"><button type="submit">Save random states</button><p class="form-status" role="status"></p></div>
+        </form>
         <form id="wordle-form" class="settings-form">
           <fieldset><legend>Daily Wordle</legend>
             <div class="setting-row"><label for="wordle-enabled">Play today's Wordle in the chosen channel</label><input id="wordle-enabled" type="checkbox" data-setting="wordle_enabled"></div>
@@ -433,7 +446,13 @@
         <details class="reference"><summary>Reload, slash commands and programme restart</summary>
           <p id="command-inventory" class="field-help"></p><div class="button-row"><button type="button" id="reload-settings" class="secondary">Reload this bot's saved settings</button><button type="button" id="sync-commands" class="secondary">Sync this bot's slash commands</button><button type="button" id="restart-programme" class="secondary">Restart all bots</button></div><p class="field-help">Restart waits for you to retry once active requests finish. Saved conversations and reminders are kept.</p>
         </details>
-        <details class="reference"><summary>Programme updates and rollback</summary>
+        <details class="reference" id="update-panel"><summary>Update Hearthling</summary>
+          <p class="field-help">Downloads the newest published version from GitHub, checks its files and dependencies, runs its built-in checks, then restarts all bots on it. Saved data and sign-in sessions are kept, and a failed startup returns to the current version automatically.</p>
+          <dl id="update-status" class="plain-facts"></dl><ul id="update-changes" class="field-help" hidden></ul>
+          <div class="button-row"><button type="button" id="check-update" class="secondary">Check for updates</button><button type="button" id="install-update" disabled>Update now</button></div>
+          <p id="update-notice" class="form-status" role="status" hidden></p>
+        </details>
+        <details class="reference"><summary>Manual releases and rollback</summary>
           <p class="field-help">Upload a Hearthling release ZIP. Its file list, checksums, installed dependencies and runnable checks must pass before you can apply it. A failed startup returns to the previous release. This updates the whole programme.</p>
           <dl id="release-status" class="plain-facts"></dl><a id="export-release" class="download-link" href="api/release">Download current programme release</a>
           <form id="release-editor" class="extra-form inline-editor"><label for="release-file">Hearthling release ZIP</label><input id="release-file" type="file" accept=".zip,application/zip" required><div class="form-footer"><button type="submit">Check uploaded release</button><p class="form-status" role="status"></p></div></form>

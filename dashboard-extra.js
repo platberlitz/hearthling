@@ -160,6 +160,26 @@ $('#new-character').addEventListener('click', () => {
 bindForm('character-editor', async (form, values) => {
   await api('characters', 'POST', values); resetEditor(form, true); await refreshExtraState(); return 'Character saved.';
 });
+bindForm('character-import', async form => {
+  const editor = $('#character-editor');
+  if (editor.classList.contains('dirty') || pendingWrites) throw new Error('Save or cancel the current character edit first.');
+  const file = $('#character-card-file').files[0];
+  if (!file || file.size > 15 * 1024 * 1024) throw new Error('Choose a PNG or JSON character card up to 15 MB.');
+  const version = selectionVersion, botId = selectedBot;
+  const content = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(new Error('The card file could not be read.'));
+    reader.readAsDataURL(file);
+  });
+  const result = await api('characters/import', 'POST', { content }, botId);
+  if (version !== selectionVersion) throw new Error('The selected bot changed. Import the card again.');
+  if (!edit('character-editor', result.character)) throw new Error('Save or cancel the current character edit first.');
+  editor.classList.add('dirty'); $('#character-preview').hidden = true;
+  resetEditor(form);
+  const duplicate = state.characters.some(item => item.name.toLowerCase() === result.character.name.toLowerCase());
+  return duplicate ? 'Card loaded. A preset with this name exists; rename it before saving to keep both.' : 'Card loaded. Review it below, then save and activate it.';
+});
 $('#preview-character').addEventListener('click', async () => {
   const button = $('#preview-character'); button.disabled = true;
   try {
@@ -389,6 +409,9 @@ async function loadDiagnostics() {
     $('#restart-programme').disabled = !release.can_restart;
     $('#apply-release').disabled = !release.can_update || !release.staged;
     $('#rollback-release').disabled = !release.can_update || !release.active?.previous;
+    maintenanceRelease = release;
+    renderUpdate(updateCheck, release);
+    if (!updateCheck) checkUpdate(false);
   } catch (error) { notice($('#maintenance-notice'), error.message, true); }
 }
 $('#refresh-diagnostics').addEventListener('click', loadDiagnostics);
@@ -452,7 +475,7 @@ for (const [id, path] of [['reload-settings', 'maintenance/reload'], ['sync-comm
 
 async function restartProgramme(action) {
   if (accountChangeBlocked()) return;
-  for (const id of ['restart-programme', 'apply-release', 'rollback-release']) document.getElementById(id).disabled = true;
+  for (const id of ['restart-programme', 'apply-release', 'rollback-release', 'install-update']) document.getElementById(id).disabled = true;
   try {
     const before = await fetch('health', { cache: 'no-store' }).then(response => response.json());
     const result = await api(`maintenance/${action}`, 'POST', {});
@@ -467,6 +490,51 @@ async function restartProgramme(action) {
     throw new Error('The restart has not been confirmed yet. Refresh this page to check the current state.');
   } catch (error) { notice($('#maintenance-notice'), error.message, true); await loadDiagnostics(); }
 }
+const updateStates = {
+  current: 'Up to date', available: 'Update available', newer: 'Running a newer version than GitHub',
+  diverged: 'Running a modified version; updating replaces it', unknown: 'Unknown running version; updating installs the newest one',
+};
+let updateCheck = null;
+function shortCommit(commit) { return commit ? commit.slice(0, 7) : 'Unknown'; }
+function renderUpdate(info, release) {
+  updateCheck = info;
+  const rows = [['Running version', shortCommit(info?.current_commit ?? release?.current_commit)]];
+  if (info) {
+    rows.push(['Newest version', `${shortCommit(info.latest_commit)} · ${info.latest_message || 'No description'}`],
+      ['Status', info.behind_by ? `${updateStates[info.status]} (${info.behind_by} new ${info.behind_by === 1 ? 'change' : 'changes'})` : updateStates[info.status] || info.status],
+      ['Last checked', new Date(info.checked_at * 1000).toLocaleString()]);
+  } else rows.push(['Updates from', release?.update_source || 'GitHub']);
+  facts($('#update-status'), rows);
+  const list = $('#update-changes'); list.replaceChildren();
+  for (const change of info?.changes || []) list.append(node('li', `${change.commit} ${change.message}`));
+  list.hidden = !list.children.length;
+  $('#install-update').disabled = !info || ['current', 'newer'].includes(info.status) || !release?.can_update;
+  if (info && !release?.can_update && !['current', 'newer'].includes(info.status))
+    notice($('#update-notice'), 'Start Hearthling with launcher.py to install updates from here. Until then, update with git pull and restart it.');
+}
+let maintenanceRelease = null;
+async function checkUpdate(refresh) {
+  const button = $('#check-update'); button.disabled = true;
+  if (refresh) notice($('#update-notice'), 'Checking GitHub…');
+  try {
+    const info = await api(`update${refresh ? '?refresh=1' : ''}`);
+    notice($('#update-notice'), '');
+    renderUpdate(info, maintenanceRelease);
+  } catch (error) { notice($('#update-notice'), error.message, true); }
+  finally { button.disabled = false; }
+}
+$('#check-update').addEventListener('click', () => checkUpdate(true));
+$('#install-update').addEventListener('click', async () => {
+  if (accountChangeBlocked()) return;
+  const button = $('#install-update'); button.disabled = true; $('#check-update').disabled = true;
+  try {
+    notice($('#update-notice'), 'Downloading the update and running its checks. This can take a few minutes…');
+    const result = await api('update', 'POST', {});
+    notice($('#update-notice'), `Version ${shortCommit(result.commit)} passed ${result.checks_passed.length} checks. Restarting on it…`);
+    await restartProgramme('apply');
+  } catch (error) { notice($('#update-notice'), error.message, true); button.disabled = false; }
+  finally { $('#check-update').disabled = false; }
+});
 $('#restart-programme').addEventListener('click', () => restartProgramme('restart'));
 $('#apply-release').addEventListener('click', () => restartProgramme('apply'));
 $('#rollback-release').addEventListener('click', () => restartProgramme('rollback'));

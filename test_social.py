@@ -14,7 +14,7 @@ import testenv  # noqa: F401
 from hearthling import APPLICATION_ID, Hearthling, OWNER_ID, SERVER_ID, open_database
 from bots import BotManager
 from features import FeatureAction, Settings
-from social import Social
+from social import RANDOM_STATE_CHANCE, Social
 from test_hearthling import ai_reply, expect_error
 from test_bots import CREDENTIALS, fake_ai
 from test_features import CHANNEL_ID, GUEST_ID, PNG, http_session, request
@@ -29,9 +29,10 @@ async def main():
             peer_id = 900000000000000222
             manager.bots[str(peer_id)] = NS(bot_id=peer_id, server_id=SERVER_ID, character_name='Alfred')
             config = bot.features
-            assert not config.settings.spontaneous_enabled and not config.settings.dm_followups_enabled
+            assert not config.settings.spontaneous_enabled and not config.settings.dm_followups_enabled and not config.settings.random_state_enabled
             for changes in ({'spontaneous_channels': ['../secret']}, {'timezone': 'Not/AZone'},
                             {'spontaneous_min_minutes': 9, 'spontaneous_max_minutes': 2},
+                            {'random_state_channels': ['../secret']}, {'random_state_enabled': True},
                             {'unavailable_windows': [{'days': [9], 'start': '23:00', 'end': '06:00'}]}):
                 expect_error(ValueError, lambda changes=changes: Settings.model_validate(config.settings.model_dump() | changes))
             guest = request(GUEST_ID, 900000000000000501)
@@ -187,6 +188,7 @@ async def main():
                 follow.assert_awaited_once()
         db.close()
     await random_replies()
+    await random_states()
     print('PASS: access/nickname gates, managed bot dialogue without tools, hard conversation stop, channel cooldowns, overnight schedules, private timezones, durable reminders, random speech, owner-only follow-ups, 0.1% unprompted replies and 0.03% spontaneous images.')
 
 
@@ -263,6 +265,76 @@ async def random_replies():
             image_message.guild = None
             assert not bot.social.random_pick(image_message, image=True)
         db.close()
+
+
+async def random_states():
+    with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent, prefix='social-state-check-') as directory:
+        db = open_database(':memory:')
+        async with Hearthling(fake_ai(), db, credentials=CREDENTIALS, data_dir=directory) as bot:
+            bot._connection.user = NS(id=APPLICATION_ID, bot=True, name='Hearthling', display_name='Hearthling')
+            manager = BotManager(bot)
+            peer = NS(bot_id=900000000000000222, server_id=SERVER_ID, accepting_messages=True)
+            manager.bots[str(peer.bot_id)] = peer
+            channel = NS(id=CHANNEL_ID, guild=NS(id=SERVER_ID), send=AsyncMock())
+            peer_settings = Settings.model_validate(bot.features.settings.model_dump() | {
+                'random_state_enabled': True, 'random_state_channels': [str(CHANNEL_ID)],
+                'random_state_silence_minutes': 0, 'recent_context': 0})
+            peer.social = Social(NS(db=open_database(':memory:'), manager=manager, bot_id=peer.bot_id,
+                                    server_id=SERVER_ID, features=NS(settings=peer_settings),
+                                    accepting_messages=True, get_channel=lambda identity: channel))
+            config = bot.features
+            config.update_settings({'random_state_enabled': True, 'random_state_channels': [str(CHANNEL_ID)],
+                                    'random_state_silence_minutes': 0, 'recent_context': 0}, {})
+            with patch.object(bot.social, 'speak', new=AsyncMock(return_value=True)) as speak, \
+                    patch.object(peer.social, 'speak', new=AsyncMock(return_value=True)) as peer_speak, \
+                    patch.object(bot, 'get_channel', return_value=channel):
+                base = time.time() - 40000 * 3600
+                total = 0
+                for hour in range(40000):
+                    before = speak.await_count + peer_speak.await_count
+                    await bot.social.random_state_tick(base + hour * 3600)
+                    await peer.social.random_state_tick(base + hour * 3600)
+                    # One shared roll per hour: at most one winner posts, and both bots agree on who.
+                    assert speak.await_count + peer_speak.await_count - before <= 1
+                    total = speak.await_count + peer_speak.await_count
+                assert 2 <= total <= 60
+                assert speak.await_count and peer_speak.await_count
+            hour = time.time() // 3600 * 3600 + 7200
+            with patch.object(bot.social, 'speak', new=AsyncMock(return_value=True)) as speak, \
+                    patch.object(peer.social, 'speak', new=AsyncMock(return_value=True)), \
+                    patch.object(bot, 'get_channel', return_value=channel), \
+                    patch('social.random.Random') as randomiser:
+                randomiser.return_value.random.return_value = RANDOM_STATE_CHANCE / 100
+                await bot.social.random_state_tick(hour)
+                speak.assert_not_awaited()  # Exactly at the threshold is a miss.
+                randomiser.return_value.random.return_value = RANDOM_STATE_CHANCE / 100 - 0.0000001
+                randomiser.return_value.choice.return_value = peer.bot_id
+                await bot.social.random_state_tick(hour)
+                speak.assert_not_awaited()  # The peer won the shared roll, not this bot.
+                randomiser.return_value.choice.return_value = bot.bot_id
+                await bot.social.random_state_tick(hour)
+                speak.assert_awaited_once()
+                assert speak.await_args.args[0] is channel
+                assert speak.await_args.args[1] == config.settings.random_state_prompt
+                assert speak.await_args.kwargs['kind'] == 'random state'
+                await bot.social.random_state_tick(hour)
+                speak.assert_awaited_once()  # The recorded win blocks a second post in the same hour.
+                db.execute('INSERT INTO activity (user_id,channel_id,last_in) VALUES (?,?,?)', ('1', str(CHANNEL_ID), hour + 3600 - 60))
+                db.commit()
+                config.update_settings({'random_state_silence_minutes': 30}, {})
+                await bot.social.random_state_tick(hour + 3600)
+                speak.assert_awaited_once()  # A channel with recent chat stays quiet.
+                db.execute('DELETE FROM activity')
+                db.commit()
+                await bot.social.random_state_tick(hour + 3600)
+                assert speak.await_count == 2
+                config.update_settings({'server_paused': True}, {})
+                with patch.object(bot, 'is_ready', return_value=True), \
+                        patch.object(bot.social, 'speak', new=AsyncMock(return_value=True)) as paused:
+                    await bot.social.tick(hour + 7200)
+                    paused.assert_not_awaited()
+        db.close()
+    print('PASS: shared hourly random state roll, single agreed winner, one post per hour, quiet-channel guard and pause gate.')
 
 
 if __name__ == '__main__':

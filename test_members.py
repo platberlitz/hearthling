@@ -185,7 +185,7 @@ async def main():
             with patch('features.aiohttp.ClientSession', return_value=client):
                 await expect_async_error(FeatureError, bot.features.generate_image(FeatureAction(action='generate_image', prompt='Tea'), request(identity=900000000000009005)))
             bot.features.update_settings({'image_provider': 'default', 'image_providers': []}, {})
-            for index, (status, text, expected) in enumerate([(429, 'Rate limit exceeded', 1), (401, 'Bad key', 1), (403, 'Refused', 1), (503, 'Daily quota exceeded', 1), (429, 'Daily total quota exceeded', 4)]):
+            for index, (status, text, expected) in enumerate([(429, 'Rate limit exceeded', 4), (401, 'Bad key', 4), (403, 'Refused', 4), (503, 'Daily quota exceeded', 1), (429, 'Daily total quota exceeded', 4)]):
                 client = http_session({'error': {'message': text}}, status)
                 with patch('features.aiohttp.ClientSession', return_value=client):
                     await expect_async_error(FeatureError, bot.features.generate_image(FeatureAction(action='generate_image', prompt='Tea'), request(identity=900000000000009010 + index)))
@@ -224,18 +224,18 @@ async def main():
                         FeatureAction(action='generate_image', prompt='Tea'), request(identity=900000000000009031 + offset)))
                 assert client.post.call_count == 1
             client = http_session(success)
-            client.post.side_effect = [http_session({'error': 'Bad key'}, 401).post.return_value,
+            client.post.side_effect = [http_session({'error': 'Bad key'}, 401).post.return_value for _ in range(4)] + [
                                        http_session(backup_success).post.return_value]
             with patch('features.aiohttp.ClientSession', return_value=client):
                 fallback = await bot.features.generate_image(FeatureAction(action='generate_image', prompt='Tea'), request(identity=900000000000009033))
-            assert client.post.call_count == 2 and fallback['model'] == 'backup/gpt-image-primary'
+            assert client.post.call_count == 5 and fallback['model'] == 'backup/gpt-image-primary'
             assert client.post.call_args.args[0].endswith('/images/generations')
             client = http_session(success)
-            client.post.side_effect = [http_session({'error': {'message': 'No valid OpenAI API keys available for this model'}}, 503).post.return_value,
+            client.post.side_effect = [http_session({'error': {'message': 'No valid OpenAI API keys available for this model'}}, 503).post.return_value for _ in range(4)] + [
                                        http_session(backup_success).post.return_value]
             with patch('features.aiohttp.ClientSession', return_value=client):
                 fallback = await bot.features.generate_image(FeatureAction(action='generate_image', prompt='Tea'), request(identity=900000000000009034))
-            assert client.post.call_count == 2 and fallback['model'] == 'backup/gpt-image-primary'
+            assert client.post.call_count == 5 and fallback['model'] == 'backup/gpt-image-primary'
             bot.features.update_settings({'image_fallback_providers': [], 'image_providers': []}, {})
             dashboard = Dashboard(bot, public_url='http://127.0.0.1/')
             async with TestClient(TestServer(dashboard.app)) as client:
