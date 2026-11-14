@@ -101,7 +101,7 @@ def export_profile(bot):
             'characters': bot.characters.list(),
             'providers': [json.loads(row[0]) for row in bot.db.execute('SELECT configuration FROM providers')],
             'lore': [{key: value for key, value in row.items() if key != 'updated_at'} for row in bot.characters.lore()],
-            'memories': rows('memories', bot.features.memories_db), 'timezones': dict(bot.db.execute('SELECT user_id,zone FROM timezones')),
+            'memories': rows('memories', bot.features.memories_db), 'timezones': dict(bot.social.zones_db.execute('SELECT user_id,zone FROM timezones')),
             'reminders': rows('reminders')}
 
 
@@ -184,6 +184,8 @@ def import_profile(bot, data, *, apply=False):
                         bot.characters.save_lore(lore.model_dump() | {'id': None})
                 for fact in bundle.memories:
                     bot.features.remember(fact.get('author_id'), fact.get('channel_id'), fact.get('fact'), keywords=fact.get('keywords'))
+                for author, zone in bundle.timezones.items():
+                    bot.social.set_zone(author, zone)
                 reload_bot(bot)
                 result['backup'] = name
             return result

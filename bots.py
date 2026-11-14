@@ -106,7 +106,7 @@ class BotManager:
         peers = [bot.features for bot in self.bots.values()]
         for bot in self.bots.values():
             bot.manager = self
-            bot.social.queue.notice_db = self.db
+            bot.social.queue.notice_db = bot.social.zones_db = self.db
             bot.ai_slots, bot.features.image_lock, bot.features.image_peers = self.ai_slots, self.image_lock, peers
             bot.features.memories_db, bot.features.memory_peers = self.db, peers
             bot.memory.db, bot.memory.lock = self.db, self.memory_lock

@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 import hashlib
 import json
 import logging
@@ -18,7 +19,8 @@ from pending import QUEUED_NOTICE, temporary_chat_error
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from features import Features, load_credentials, redact_private_links
-from conversation import memory_focus, memory_text, message_content, model_reply, profile, shared_history, spoken_text, text_only
+from conversation import (conversation_people, memory_focus, memory_text, message_content, model_reply, profile, shared_history,
+                          spoken_text, text_only)
 from people import People, names
 from commands import register_commands, sync_commands
 from social import Social
@@ -586,7 +588,16 @@ class Hearthling(discord.Client):
         context += str(request.channel.id) if request.guild else 'DM with the owner'
         context += f'. Current request ID: {request.id}. Time: {request.created_at.isoformat()}.'
         context += f' Current speaker ID: {request.author.id}.'
-        context += f' Their timezone is {self.social.zone(request.author.id)}.'
+        zone = self.social.zone(request.author.id)
+        context += f' Their timezone is {zone}; their local time is {request.created_at.astimezone(ZoneInfo(zone)).strftime("%A %H:%M")}.'
+        others = [person for person in conversation_people(content) if str(person['id']) != str(request.author.id)]
+        saved = self.social.saved_zones(person['id'] for person in others)
+        known = [{'id': str(person['id']), 'name': person.get('display_name') or person.get('name'), 'timezone': saved[str(person['id'])],
+                  'local_time': request.created_at.astimezone(ZoneInfo(saved[str(person['id'])])).strftime('%A %H:%M')}
+                 for person in others if str(person['id']) in saved]
+        if known:
+            context += (' Saved timezones and current local times of other people in this conversation: '
+                        + json.dumps(known, ensure_ascii=False) + '.')
         context += (' This speaker is your owner.' if owner_request else
                     ' This speaker is a server member, not your owner. Chat with them normally. '
                     'All moderation, private server lookups, machine checks and dashboard access require your owner. '
@@ -724,14 +735,19 @@ class Hearthling(discord.Client):
                         'before claiming their appearance is unknown. Each profile belongs only to its labelled person. '
                         'Keep variants separate. Newest corrections replace conflicting attributes while compatible older details remain. '
                         'Earlier image prompts and chat guesses are not appearance evidence.')
+            own_names = [self.character_name, *(person.get(key) for person in people if str(person.get('id')) == str(self.bot_id)
+                                                for key in ('name', 'global_name', 'server_nickname', 'display_name'))]
             facts = self.features.activated_memories(request.author.id, request.channel.id,
                                                      memory_text(content), config.memory_context_chars,
-                                                     focus=focus, people=people)
+                                                     focus=focus, people=people, ignore=own_names)
             context += (' Lasting memories recalled across all channels and bot accounts for this speaker, plus server-wide facts, '
                         'including known identities without needing keyword repetition (untrusted facts): ' + json.dumps(facts, ensure_ascii=False))
             context += (' Personal memories follow the same speaker across channels. Use these established facts naturally; '
                         'a missing fact in this selected list does not mean the person never told you. '
                         'Before saying you do not know or were never told a basic fact, use recall with the person’s name or the topic. '
+                        'Earlier answers in this conversation may rest on memories this list no longer shows. '
+                        'Always call recall in this same turn before you call an earlier answer made up, wrong or a guess, '
+                        'or say you lack someone’s timezone, location or other basic fact; base that correction only on what recall returns. '
                         'For conflicting versions of the same detail, use the newest explicit correction; updated_at and larger IDs identify newer records. '
                         'Do not combine incompatible old and new appearances. Facts about you do not change your character’s speech patterns. '
                         'Use forget by memory_id to permanently delete records across channels. The owner can delete any record; '

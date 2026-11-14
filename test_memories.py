@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -72,6 +73,44 @@ async def recall_checks(root):
         assert bot.db.execute('SELECT messages FROM turns WHERE request_id=?', (str(speaker.id),)).fetchone()[0] != '[]'
         assert not (await bot.execute(json.dumps({'action': 'remember', 'fact': 'Not mine', 'memory_id': private}),
                                      speaker, tool='feature_tool'))['ok']
+
+
+async def crowding_checks(root):
+    async with Hearthling(None, open_database(':memory:'), data_dir=root) as bot:
+        feature = bot.features
+        # A reminder request once lost the speaker's timezone to facts that only shared 'to' or the bot's name.
+        zone = feature.remember(GUEST_ID, CHANNEL_ID, 'Guest lives in Germany (CET/CEST).')['memory_id']
+        lore = {feature.remember(OWNER_ID, '', f'Server lore {index}: ' + 'Hearthling talked to everyone. ' * 6,
+                                 keywords='hearthling, to, through')['memory_id'] for index in range(30)}
+        message = request(GUEST_ID)
+        message.content = 'Hearthling, remind me in 10 hours to go back here and read through'
+        text = turn_for(message)[0]['content']
+        focus, people = memory_focus(text)
+        people.append({'id': str(APPLICATION_ID), 'display_name': 'Hearthling'})
+        selected = {item['id'] for item in feature.activated_memories(
+            GUEST_ID, CHANNEL_ID, memory_text(text), 600, focus=focus, people=people, ignore=['Hearthling'])}
+        assert zone in selected and not lore & selected
+        assert not feature.activated_memories(GUEST_ID, CHANNEL_ID, 'Hearthling, to and through', focus='Hearthling', ignore=['Hearthling'])
+
+        # A long personal history fills at most half the budget, so the current topic still fits.
+        for index in range(40):
+            feature.remember(OWNER_ID, CHANNEL_ID, f'Owner hobby record {index}: ' + 'knits scarves ' * 6)
+        topic = feature.remember(GUEST_ID, '', 'Server tea night serves jasmine tea.')['memory_id']
+        selected = feature.activated_memories(OWNER_ID, CHANNEL_ID, 'jasmine tea tonight', 1000, focus='jasmine tea tonight',
+                                              people=[{'id': str(OWNER_ID), 'display_name': 'Owner'}])
+        ids = [item['id'] for item in selected]
+        assert topic in ids and sum('hobby record' in item['fact'] for item in selected) >= 3
+        assert len(json.dumps(selected, ensure_ascii=False)) <= 1000
+
+        # Everyone's saved timezone reaches the prompt, not just the speaker's.
+        bot.social.set_zone(GUEST_ID, 'Europe/Berlin')
+        bot.social.set_zone(OWNER_ID, 'Asia/Hong_Kong')
+        message.mentions = [NS(id=OWNER_ID, bot=False, display_name='Owner')]
+        prompt = (await bot.converse(message, preview=True))['messages'][0]['content']
+        assert 'Their timezone is Europe/Berlin; their local time is' in prompt
+        assert '"name": "Owner", "timezone": "Asia/Hong_Kong", "local_time":' in prompt
+        assert 'Guest lives in Germany' in prompt and 'Server lore' not in prompt
+        assert 'Always call recall in this same turn before you call an earlier answer made up' in prompt
 
 
 async def capture_checks(root):
@@ -232,6 +271,10 @@ async def shared_checks(root):
                     fact('Guest prefers jasmine tea.', 'My favourite tea is jasmine')))):
                 await secondary.memory.process_pending()
             assert primary.features.memories(GUEST_ID, CHANNEL_ID + 1, 'jasmine')
+            # Timezones follow members across bot accounts, like memories do.
+            secondary.social.set_zone(GUEST_ID, 'Europe/Berlin')
+            assert primary.social.zone(GUEST_ID) == 'Europe/Berlin'
+            assert primary.social.saved_zones([GUEST_ID, OWNER_ID]) == {str(GUEST_ID): 'Europe/Berlin'}
         finally:
             await secondary.close()
             await secondary.ai.close()
@@ -258,9 +301,10 @@ async def chat_checks(root):
 async def main():
     with tempfile.TemporaryDirectory(prefix='hearthling-memory-', dir='/tmp/opencode') as directory:
         root = Path(directory)
-        for test in (recall_checks, capture_checks, cancellation_checks, restart_checks, shared_checks, chat_checks):
+        for test in (recall_checks, crowding_checks, capture_checks, cancellation_checks, restart_checks, shared_checks, chat_checks):
             await test(root)
     print('PASS: identity without repeated keywords, nickname changes, focus/budget/privacy, in-place tool corrections, '
+          'filler and bot-name keywords, speaker budget cap, everyone\'s timezones in the prompt and across bots, '
           'independent capture/evidence checks, durable retry/restart, cross-bot deduplication and recall, '
           'forget/history-clear/disabled-memory cancellation.')
 

@@ -41,12 +41,15 @@ ImageSize = Literal['1024x1024', '1024x1536', '1536x1024']
 
 
 KEYWORD_STOPWORDS = frozenset('''
-a about after again also am an and any are as at be been being before but by can could did do does
-each every for from had has have he her hers him his if in into is it its just like likes loved loves
-many may me member members might mine more most much must my no not of on once only or other our ours
-over people person prefer prefers really server servers shall she should so some than that the their
-theirs them then there these they this those too under until up us user users very want wants was we
-were what when where which while who whom why will with would you your yours
+a about according after again aka all also always am an and any are as ask asked asks at be because been
+being before both but by called can could did do does each either every finds for from get gets go goes
+going got had has have he her hers him his how if in including into is it its just know knows like likes
+loved loves made make makes many may me member members might mine more most much must my named never no
+not now of off ok okay on once one only or other our ours out over own people per person please prefer
+prefers really said say says server servers set shall she should so some something still than that the
+their theirs them then there these they thing things thinks this those through to told too under until
+up us use used user users uses very want wants was way we were what when where which while who whom
+why will with would yeah yes you your yours
 '''.split())
 
 
@@ -71,11 +74,13 @@ def clean_keywords(value):
     return ', '.join(keywords[:20])
 
 
-def keyword_hits(keywords, text):
+def keyword_hits(keywords, text, ignore=frozenset()):
+    # Older rows may still carry filler keywords such as 'to'; they never count as a topic match.
     words = set(re.findall(r'\w+', text.casefold()))
     return sum(bool(re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', text, re.I))
                if ' ' in keyword else keyword.casefold() in words
-               for keyword in (part.strip() for part in keywords.split(',')) if keyword)
+               for keyword in (part.strip() for part in keywords.split(','))
+               if keyword and keyword.casefold() not in KEYWORD_STOPWORDS and keyword.casefold() not in ignore)
 
 
 IDENTITY_FACT = re.compile(
@@ -118,7 +123,7 @@ class Settings(SocialOptions, ProviderOptions, ImageOptions):
     host_services: list[Annotated[str, Field(pattern=r'^[A-Za-z0-9@_.:-]{1,100}$')]] = Field(default_factory=list, max_length=30)
     memory_enabled: bool = True
     auto_memory: bool = True
-    memory_context_chars: Annotated[int, Field(ge=0, le=20000)] = 4000
+    memory_context_chars: Annotated[int, Field(ge=0, le=20000)] = 8000
     expressions_enabled: bool = True
     expression_uploads: bool = True
     public_expression_uploads: bool = True
@@ -494,6 +499,7 @@ class Features:
     def memories(self, author_id, channel_id, query='', limit=50):
         limit = max(1, min(int(limit), 1000))
         tokens = [word for word in re.findall(r'\w+', (query or '').casefold()) if len(word) >= 2]
+        tokens = [word for word in tokens if word not in KEYWORD_STOPWORDS] or tokens
         if not tokens:
             rows = self.memories_db.execute(
                 "SELECT id, fact FROM memories WHERE author_id=? AND channel_id<>'' AND instr(lower(fact), lower(?)) > 0 "
@@ -534,7 +540,7 @@ class Features:
         shared = self.memories_db.execute('SELECT count(*) FROM memories WHERE channel_id=?', (SHARED_SCOPE,)).fetchone()[0]
         return {'personal': own, 'server': shared}
 
-    def activated_memories(self, author_id, channel_id, text, budget=4000, *, focus='', people=()):
+    def activated_memories(self, author_id, channel_id, text, budget=4000, *, focus='', people=(), ignore=()):
         # ponytail: full scan of all scoped memories per message; switch to an FTS5 table if the
         # memory table ever reaches tens of thousands of rows.
         if budget <= 0:
@@ -542,26 +548,44 @@ class Features:
         rows = self.memories_db.execute(
             'SELECT id, fact, keywords, updated_at, channel_id FROM memories WHERE (author_id=? OR channel_id=?) '
             'ORDER BY updated_at DESC, id DESC', (str(author_id), SHARED_SCOPE)).fetchall()
+        # Names such as the bot's own only address someone; they say nothing about the topic.
+        ignored = {part for name in ignore if isinstance(name, str)
+                   for part in (name.casefold().strip(), *re.findall(r'\w+', name.casefold())) if len(part) >= 2}
+        speakers = [person for person in people if str(person.get('id', '')) == str(author_id)]
+        def size(item):
+            return len(json.dumps({'id': item[4], 'fact': item[5], 'updated_at': item[3]}, ensure_ascii=False)) + 2
         scored = []
         for row in rows:
-            hits = keyword_hits(row[2], text or '')
-            current_hits = keyword_hits(row[2], focus or '')
+            hits = keyword_hits(row[2], text or '', ignored)
+            current_hits = keyword_hits(row[2], focus or '', ignored)
             subject = any(about_person(row[1], person) for person in people)
             personal = row[4] != SHARED_SCOPE
             # Speaker facts and known identities must survive messages such as 'draw me' or 'hello'.
             baseline = bool(people) and (personal or subject)
             identity = baseline and bool(IDENTITY_FACT.search(row[1]))
+            own = baseline and (personal or any(about_person(row[1], person) for person in speakers))
             if hits or current_hits or baseline:
-                tier = 0 if identity else 1 if current_hits else 2 if baseline else 3
+                tier = (0 if identity else 1 if baseline and current_hits else 2 if own
+                        else 3 if current_hits else 4 if baseline else 5)
                 scored.append((tier, current_hits, hits, row[3], row[0], row[1]))
-        scored.sort(key=lambda item: (item[0], -item[1], -item[3], -item[4], -item[2]))
+        order = lambda item: (item[0], -item[1], -item[3], -item[4], -item[2])
+        scored.sort(key=order)
+        # The speaker's own facts outrank loose topic matches, but only within half the budget,
+        # so a long personal history cannot push the current topic out.
+        share = 0
+        for index, item in enumerate(scored):
+            if item[0] == 2:
+                share += size(item)
+                if share > budget // 2:
+                    scored[index] = (4, *item[1:])
+        scored.sort(key=order)
         result, used = [], 2
-        for _, _, _, updated, row_id, fact in scored:
-            entry = {'id': row_id, 'fact': fact, 'updated_at': updated}
-            size = len(json.dumps(entry, ensure_ascii=False)) + (2 if result else 0)
-            if used + size > budget:
+        for item in scored:
+            entry = {'id': item[4], 'fact': item[5], 'updated_at': item[3]}
+            needed = size(item) - (0 if result else 2)
+            if used + needed > budget:
                 continue
-            used += size
+            used += needed
             result.append(entry)
         return result
 

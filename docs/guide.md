@@ -119,7 +119,9 @@ Sites can block automated access even for public posts. Private posts and conten
 
 ## Lasting memories and lore
 
-Facts learned about members are stored in SQLite with activation keywords and shared across all managed bots. A memory is injected into the prompt only when one of its keywords matches the current conversation, up to a configurable character budget (4000 characters by default), and bots can also search memories explicitly with their recall tool.
+Facts learned about members are stored in SQLite with activation keywords and shared across all managed bots. Each message gets a selection of memories, up to a configurable character budget (8000 characters by default): the speaker's own facts and facts about people in the conversation come first, using at most half the budget, followed by facts whose keywords match the conversation. Filler words such as 'to' or 'please' and the bot's own name never count as a match. Bots can also search memories explicitly with their recall tool, and they are told to recall before saying they never learned a basic fact or taking back an earlier answer.
+
+Saved timezones are shared across all managed bots too. Each message includes the speaker's timezone and local time, plus the saved timezones and local times of everyone else in the conversation.
 
 Appearance facts get a server-wide scope so any bot can recall what someone looks like across channels. Personal facts stay scoped to the person, and forgetting a fact also purges that person's recent turn history across bots so an old cached turn doesn't re-teach the deleted fact on the next message.
 

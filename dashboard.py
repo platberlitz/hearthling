@@ -485,7 +485,7 @@ class Dashboard:
 
     async def reminders(self, request):
         bot = self.bot_for(request)
-        return web.json_response({'reminders': bot.social.reminder_list(), 'timezones': dict(bot.db.execute('SELECT user_id,zone FROM timezones'))})
+        return web.json_response({'reminders': bot.social.reminder_list(), 'timezones': dict(bot.social.zones_db.execute('SELECT user_id,zone FROM timezones'))})
 
     async def save_reminder(self, request):
         bot = self.bot_for(request)

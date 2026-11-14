@@ -190,6 +190,8 @@ class Social:
             CREATE TABLE IF NOT EXISTS bot_reply_sources (message_id TEXT PRIMARY KEY);
         ''')
         self.queue = RequestQueue(bot)
+        # Every bot account shares the primary account's timezones once the bot manager links them.
+        self.zones_db = self.db
 
     @property
     def config(self):
@@ -204,16 +206,23 @@ class Social:
         self.db.commit()
 
     def zone(self, user_id=None):
-        row = self.db.execute('SELECT zone FROM timezones WHERE user_id=?', (str(user_id),)).fetchone() if user_id else None
+        row = self.zones_db.execute('SELECT zone FROM timezones WHERE user_id=?', (str(user_id),)).fetchone() if user_id else None
         return row[0] if row else self.config.timezone
+
+    def saved_zones(self, user_ids):
+        ids = list(dict.fromkeys(str(user_id) for user_id in user_ids if user_id))
+        if not ids:
+            return {}
+        return dict(self.zones_db.execute(
+            'SELECT user_id, zone FROM timezones WHERE user_id IN (' + ','.join('?' * len(ids)) + ')', ids).fetchall())
 
     def set_zone(self, user_id, zone):
         if zone:
             SocialOptions.valid_timezone(zone)
-            self.db.execute('INSERT OR REPLACE INTO timezones VALUES (?, ?)', (str(user_id), zone))
+            self.zones_db.execute('INSERT OR REPLACE INTO timezones VALUES (?, ?)', (str(user_id), zone))
         else:
-            self.db.execute('DELETE FROM timezones WHERE user_id=?', (str(user_id),))
-        self.db.commit()
+            self.zones_db.execute('DELETE FROM timezones WHERE user_id=?', (str(user_id),))
+        self.zones_db.commit()
         return self.zone(user_id)
 
     def available(self, now=None):

@@ -270,6 +270,26 @@ def memory_focus(content):
     return '\n'.join(part for part in parts if isinstance(part, str)), list(people.values())
 
 
+def conversation_people(content):
+    """Everyone visible around the current message, including recent channel speakers."""
+    if isinstance(content, list):
+        content = content[0].get('text', '') if content else ''
+    try:
+        data, _ = json.JSONDecoder().raw_decode(content)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    reply = data.get('replying_to')
+    candidates = [data.get('speaker'), *(data.get('visible_people') or []), *(data.get('mentioned_names') or []),
+                  reply.get('speaker') if isinstance(reply, dict) else None, *(data.get('recent_participants') or [])]
+    people = {}
+    for person in candidates:
+        if isinstance(person, dict) and person.get('id'):
+            people.setdefault(str(person['id']), person)
+    return list(people.values())
+
+
 def text_only(messages, reason='Image input is unavailable. Do not claim to have inspected its contents.'):
     result = []
     for message in messages:
