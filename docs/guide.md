@@ -175,7 +175,7 @@ Sign-in links are single-use, expire after ten minutes and set an HTTP-only sess
 
 ## Updating Hearthling
 
-Open the dashboard's Maintenance tab and expand 'Update Hearthling'. It checks the newest commit on GitHub's `main` branch, tells you how far behind you are and lists what changed. 'Update now' downloads that version, runs its tests and switches to it on restart. If the new version doesn't come back healthy, the launcher puts the previous one back by itself, and 'Rollback' does the same by hand.
+Open the dashboard's Maintenance tab and expand 'Update Hearthling'. It checks the newest commit on GitHub's `main` branch, shows the version number you're running next to the newest one (from the `VERSION` file, alongside the short commit), tells you how far behind you are and lists what changed. 'Update now' downloads that version, runs its tests and switches to it on restart. If the new version doesn't come back healthy, the launcher puts the previous one back by itself, and 'Rollback' does the same by hand.
 
 This only works when you start Hearthling with `launcher.py`. If you run `hearthling.py` directly, update with `git pull` and restart it instead.
 

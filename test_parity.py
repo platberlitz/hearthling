@@ -24,7 +24,7 @@ from hearthling import APPLICATION_ID, Hearthling, OWNER_ID, SERVER_ID, open_dat
 from images import IMAGE_STYLE, ImageSpec, download_image, extension, image_request
 import launcher
 import maintenance
-from maintenance import declared_files, export_profile, github_release, import_profile, inspect_release, installed_commit, release_archive
+from maintenance import code_version, declared_files, export_profile, github_release, import_profile, inspect_release, installed_commit, installed_version, release_archive
 from providers import Providers, ProviderSpec, build_request, normalise, strip_prefill, with_prefill, yaml_object
 from test_features import PNG, http_session, request
 from test_hearthling import ai_reply, expect_async_error, expect_error
@@ -368,6 +368,10 @@ async def update_checks(dashboard, contents, process):
     """Exercise the GitHub updater without touching the network."""
     assert declared_files(contents['maintenance.py']) == maintenance.RELEASE_FILES
     assert declared_files(b"RELEASE_FILES = {'hearthling.py', '../x'}") is None
+    assert code_version(b'1.2.3\n') == '1.2.3' and code_version(b'v1.2') is None and code_version(None) is None
+    assert installed_version() == (Path(maintenance.CODE_ROOT) / 'VERSION').read_text().strip() == contents['VERSION'].decode().strip()
+    with tempfile.TemporaryDirectory() as folder:
+        assert installed_version(Path(folder)) is None
     added = contents['maintenance.py'].replace(b"'web_sources.py',", b"'web_sources.py', 'brand_new.py',", 1)
     source = io.BytesIO()
     with zipfile.ZipFile(source, 'w') as archive:
@@ -395,6 +399,9 @@ async def update_checks(dashboard, contents, process):
     calls = []
     async def github(url, *, binary=False):
         calls.append(url)
+        if binary and url.endswith('/VERSION'):
+            assert url == f'https://raw.githubusercontent.com/platberlitz/hearthling/{new}/VERSION'
+            return b'0.2.0\n'
         if binary:
             assert url == f'https://codeload.github.com/platberlitz/hearthling/zip/{new}'
             return source.getvalue()
@@ -409,16 +416,20 @@ async def update_checks(dashboard, contents, process):
         info = await work.check_update()
         assert info['status'] == 'available' and info['behind_by'] == 2 and info['latest_message'] == 'Newest change'
         assert [item['message'] for item in info['changes']] == ['Newest change', 'Older change']
-        assert await work.check_update() is info and len(calls) == 2
+        assert info['latest_version'] == '0.2.0' and info['current_version'] == installed_version()
+        assert work.status()['current_version'] == installed_version()
+        assert await work.check_update() is info and len(calls) == 3
         staged = await work.download_update()
         assert staged['commit'] == new and staged['id'] == identity and work.status()['staged']['commit'] == new
+        assert staged['version'] == '0.2.0'
         assert work.read('commits.json')[identity] == new
         with patch.dict('os.environ', {'HEARTHLING_RELEASE': identity}):
             assert work.current_commit() == new
             async def latest(url, *, binary=False):
                 return {'sha': new, 'commit': {'message': 'Newest change'}}
             with patch('maintenance.github_request', new=latest):
-                assert (await work.check_update(refresh=True))['status'] == 'current'
+                current = await work.check_update(refresh=True)
+                assert current['status'] == 'current' and current['latest_version'] == current['current_version']
                 await expect_async_error(ValueError, work.download_update())
     async def limited(url, *, binary=False):
         raise ValueError('GitHub is limiting update checks from this server right now. Try again in an hour.')

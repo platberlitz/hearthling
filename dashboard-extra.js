@@ -496,11 +496,12 @@ const updateStates = {
 };
 let updateCheck = null;
 function shortCommit(commit) { return commit ? commit.slice(0, 7) : 'Unknown'; }
+function versionLabel(version, commit) { return version ? `${version} (${shortCommit(commit)})` : shortCommit(commit); }
 function renderUpdate(info, release) {
   updateCheck = info;
-  const rows = [['Running version', shortCommit(info?.current_commit ?? release?.current_commit)]];
+  const rows = [['Running version', versionLabel(info?.current_version ?? release?.current_version, info?.current_commit ?? release?.current_commit)]];
   if (info) {
-    rows.push(['Newest version', `${shortCommit(info.latest_commit)} · ${info.latest_message || 'No description'}`],
+    rows.push(['Newest version', `${versionLabel(info.latest_version, info.latest_commit)} · ${info.latest_message || 'No description'}`],
       ['Status', info.behind_by ? `${updateStates[info.status]} (${info.behind_by} new ${info.behind_by === 1 ? 'change' : 'changes'})` : updateStates[info.status] || info.status],
       ['Last checked', new Date(info.checked_at * 1000).toLocaleString()]);
   } else rows.push(['Updates from', release?.update_source || 'GitHub']);
@@ -530,7 +531,7 @@ $('#install-update').addEventListener('click', async () => {
   try {
     notice($('#update-notice'), 'Downloading the update and running its checks. This can take a few minutes…');
     const result = await api('update', 'POST', {});
-    notice($('#update-notice'), `Version ${shortCommit(result.commit)} passed ${result.checks_passed.length} checks. Restarting on it…`);
+    notice($('#update-notice'), `Version ${versionLabel(result.version, result.commit)} passed ${result.checks_passed.length} checks. Restarting on it…`);
     await restartProgramme('apply');
   } catch (error) { notice($('#update-notice'), error.message, true); button.disabled = false; }
   finally { $('#check-update').disabled = false; }

@@ -34,10 +34,10 @@ RELEASE_FILES = {
     'testenv.py', 'test_hearthling.py', 'test_features.py', 'test_bots.py', 'test_conversation.py', 'test_memories.py', 'test_social.py',
     'test_pending.py', 'test_parity.py', 'test_expressions.py', 'test_members.py', 'test_wordle.py', 'test_releases.py', 'test_news.py',
     'test_appearances.py', 'test_web_sources.py', 'media.py', 'test_media.py',
-    'gifs.py', 'test_gifs.py',
+    'gifs.py', 'test_gifs.py', 'VERSION',
 }
 # The bundled launcher is used by release checks; systemd keeps using the installed launcher.
-OPTIONAL_FILES = {'README.md', 'LICENSE', 'first_run.py', 'avatar.png'}
+OPTIONAL_FILES = {'README.md', 'LICENSE', 'first_run.py', 'avatar.png', 'VERSION'}
 REQUIRED_FILES = RELEASE_FILES - OPTIONAL_FILES
 CORE_FILES = {'hearthling.py', 'launcher.py', 'maintenance.py', 'requirements.txt'}
 SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
@@ -47,6 +47,7 @@ UPDATE_REPOSITORY = os.environ.get('HEARTHLING_UPDATE_REPOSITORY', 'platberlitz/
 UPDATE_BRANCH = os.environ.get('HEARTHLING_UPDATE_BRANCH', 'main')
 UPDATE_CACHE_SECONDS = 300
 COMMIT = re.compile(r'[0-9a-f]{40}')
+SEMVER = re.compile(r'\d+\.\d+\.\d+')
 
 
 def reload_bot(bot):
@@ -330,6 +331,18 @@ def installed_commit(root=INSTALL_ROOT):
     return head if COMMIT.fullmatch(head) else None
 
 
+def code_version(raw):
+    text = raw.decode('utf-8', 'replace').strip() if isinstance(raw, bytes) else ''
+    return text if SEMVER.fullmatch(text) else None
+
+
+def installed_version(root=CODE_ROOT):
+    try:
+        return code_version((root / 'VERSION').read_bytes())
+    except OSError:
+        return None
+
+
 def first_line(text):
     return (text or '').strip().split('\n', 1)[0][:200]
 
@@ -348,6 +361,7 @@ class Maintenance:
 
     def status(self):
         return {'current': os.environ.get('HEARTHLING_RELEASE', 'installed'), 'current_commit': self.current_commit(),
+                'current_version': installed_version(),
                 'active': self.read('active.json'), 'staged': self.read('staged.json'), 'last_update': self.read('status.json'),
                 'update_source': '{}@{}'.format(UPDATE_REPOSITORY, UPDATE_BRANCH),
                 'can_restart': bool(self.dashboard.manager and getattr(self.dashboard.manager, 'stop_event', None)),
@@ -370,17 +384,24 @@ class Maintenance:
             raise ValueError(f'GitHub has no {branch} branch for {repository}.')
         details = latest.get('commit') if isinstance(latest.get('commit'), dict) else {}
         result = {'repository': repository, 'branch': branch, 'current_commit': current, 'latest_commit': latest['sha'],
+                  'current_version': installed_version(), 'latest_version': None,
                   'latest_message': first_line(details.get('message')), 'latest_date': (details.get('committer') or {}).get('date'),
                   'status': 'unknown', 'behind_by': None, 'changes': [], 'checked_at': time.time()}
         if current == latest['sha']:
-            result['status'] = 'current'
-        elif current:
-            compare = await github_request(f'https://api.github.com/repos/{repository}/compare/{current}...{latest["sha"]}')
-            if isinstance(compare, dict):
-                result['status'] = {'ahead': 'available', 'identical': 'current', 'behind': 'newer', 'diverged': 'diverged'}.get(compare.get('status'), 'unknown')
-                result['behind_by'] = compare.get('ahead_by')
-                result['changes'] = [{'commit': item['sha'][:7], 'message': first_line(item.get('commit', {}).get('message'))}
-                                     for item in (compare.get('commits') or [])[-20:] if isinstance(item, dict) and isinstance(item.get('sha'), str)][::-1]
+            result['status'], result['latest_version'] = 'current', result['current_version']
+        else:
+            try:
+                result['latest_version'] = code_version(await github_request(
+                    f'https://raw.githubusercontent.com/{repository}/{latest["sha"]}/VERSION', binary=True))
+            except ValueError:
+                pass
+            if current:
+                compare = await github_request(f'https://api.github.com/repos/{repository}/compare/{current}...{latest["sha"]}')
+                if isinstance(compare, dict):
+                    result['status'] = {'ahead': 'available', 'identical': 'current', 'behind': 'newer', 'diverged': 'diverged'}.get(compare.get('status'), 'unknown')
+                    result['behind_by'] = compare.get('ahead_by')
+                    result['changes'] = [{'commit': item['sha'][:7], 'message': first_line(item.get('commit', {}).get('message'))}
+                                         for item in (compare.get('commits') or [])[-20:] if isinstance(item, dict) and isinstance(item.get('sha'), str)][::-1]
         self.update_cache = result
         return result
 
@@ -400,7 +421,7 @@ class Maintenance:
         commits[result['id']] = update['latest_commit']
         write_private_json(self.directory / 'commits.json', commits)
         self.update_cache = None
-        return result
+        return {**result, 'version': update['latest_version']}
 
     async def stage(self, raw, source=None):
         async with self.lock:
