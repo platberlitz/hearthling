@@ -34,7 +34,7 @@ RELEASE_FILES = {
     'testenv.py', 'test_hearthling.py', 'test_features.py', 'test_bots.py', 'test_conversation.py', 'test_memories.py', 'test_social.py',
     'test_pending.py', 'test_parity.py', 'test_expressions.py', 'test_members.py', 'test_wordle.py', 'test_releases.py', 'test_news.py',
     'test_appearances.py', 'test_web_sources.py', 'media.py', 'test_media.py',
-    'gifs.py', 'test_gifs.py', 'VERSION',
+    'gifs.py', 'test_gifs.py', 'civitai.py', 'test_civitai.py', 'VERSION',
 }
 # The bundled launcher is used by release checks; systemd keeps using the installed launcher.
 OPTIONAL_FILES = {'README.md', 'LICENSE', 'first_run.py', 'avatar.png', 'VERSION'}

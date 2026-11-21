@@ -61,6 +61,7 @@
           <div><dt>Conversation</dt><dd><strong id="chat-model">Loading…</strong><span id="chat-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="chat">Test connection</button></div>
           <div><dt>Pictures</dt><dd><strong id="image-provider-name">Default image provider</strong><span id="image-status" class="muted">Not checked yet</span></dd><span class="row-note">Requested in Discord</span></div>
           <div><dt>Web search</dt><dd><strong>Brave Search</strong><span id="search-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="web_search">Test search</button></div>
+          <div><dt>Civitai</dt><dd><strong>Models, images and base models</strong><span id="civitai-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="civitai">Check Civitai</button></div>
           <div><dt>Host machine</dt><dd><strong>Read-only health checks</strong><span id="host-status" class="muted">Not checked yet</span></dd><button type="button" class="secondary small" data-check="host_status">Check host</button></div>
         </dl>
         <div id="check-result" class="check-result" role="status" hidden></div>
@@ -185,6 +186,10 @@
             <label for="brave-key">Replacement Brave API key</label><input type="password" id="brave-key" data-key="brave_api_key" autocomplete="new-password" maxlength="4096" aria-describedby="brave-key-help">
             <p id="brave-key-help" class="field-help">Leave blank to keep the saved key.</p>
           </fieldset>
+          <fieldset data-assistant-only><legend>Civitai account</legend>
+            <label for="civitai-key">Replacement Civitai API key</label><input type="password" id="civitai-key" data-key="civitai_api_key" autocomplete="new-password" maxlength="4096" aria-describedby="civitai-key-help">
+            <p id="civitai-key-help" class="field-help">Optional. Civitai listings work signed out; a key from Civitai's account settings signs requests in as you.</p>
+          </fieldset>
           <div class="form-footer"><button type="submit">Save connections</button><p class="form-status" role="status"></p></div>
         </form>
         <details class="reference"><summary>Providers at a different address, and the order to try</summary>
@@ -258,6 +263,11 @@
             <div class="setting-row"><label for="search-enabled">Search the web and read links on request</label><input type="checkbox" id="search-enabled" data-setting="search_enabled"></div>
             <div class="setting-row"><div><label for="public-search">Let server members search and read links</label><p class="field-help">Web and image searches use your Brave key; reading public pages needs no key. Posting found images follows the picture permissions. Server chat must also be enabled.</p></div><input type="checkbox" id="public-search" data-setting="public_search"></div>
             <p class="field-help">Successful searches may be reused for five minutes. Search excerpts are not full-page reads.</p>
+          </fieldset>
+          <fieldset data-assistant-only><legend>Civitai</legend>
+            <div class="setting-row"><label for="civitai-enabled">Browse Civitai models and images</label><input type="checkbox" id="civitai-enabled" data-setting="civitai_enabled"></div>
+            <div class="setting-row"><label for="public-civitai">Let server members browse Civitai</label><input type="checkbox" id="public-civitai" data-setting="public_civitai"></div>
+            <p class="field-help">Searches models, opens model pages, lists popular images and the base models Civitai supports. Adult results only appear in age-restricted channels. Each identical request is reused for five minutes.</p>
           </fieldset>
           <fieldset data-assistant-only><legend>Host health</legend>
             <div class="setting-row"><div><label for="host-status-enabled">Read machine health and service status</label><p class="field-help">Only you can request this. It checks the machine without changing it.</p></div><input type="checkbox" id="host-status-enabled" data-setting="host_status_enabled"></div>
@@ -335,7 +345,7 @@
             <label for="news-channel">News channel</label><select id="news-channel" data-setting="news_channel" data-choices="channels"><option value="">No channel chosen</option></select>
             <label for="news-hours">Check every this many hours</label><input id="news-hours" type="number" min="1" max="48" data-setting="news_hours" required>
             <label for="news-feeds">Feeds to read</label><textarea id="news-feeds" data-setting="news_feeds" data-type="lines" rows="4" spellcheck="false" placeholder="https://example.com/feed.xml" aria-describedby="news-feeds-help"></textarea>
-            <p id="news-feeds-help" class="field-help">One RSS or Atom feed address per line, up to thirty.</p>
+            <p id="news-feeds-help" class="field-help">One RSS or Atom feed address per line, up to thirty. Two special addresses also work: a Hugging Face model list such as https://huggingface.co/api/models?pipeline_tag=text-to-image&amp;sort=trendingScore&amp;limit=15 reports popular new models from the past week, and https://civitai.com/api/v1/enums reports new base models as Civitai adds them.</p>
             <label for="news-topic">What counts as news</label><textarea id="news-topic" data-setting="news_topic" rows="3" maxlength="2000" required aria-describedby="news-topic-help"></textarea>
             <p id="news-topic-help" class="field-help">A short model check keeps only new stories that match this, then the bot posts a roundup in its own character with numbered source links. Nothing is posted when nothing matches. Enable this on just one bot for each channel.</p>
           </fieldset><div class="form-footer"><button type="submit">Save news roundups</button><p class="form-status" role="status"></p></div>

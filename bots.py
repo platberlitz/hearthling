@@ -172,7 +172,7 @@ class BotManager:
                     'news_enabled': False, 'news_channel': '',
                     'bot_mode': data.bot_mode or 'assistant'}
                 bot.features.update_settings(settings, {key: credentials[key] for key in
-                    ('ai_api_key', 'image_api_key', 'image_fallback_keys', 'brave_api_key') if credentials.get(key)})
+                    ('ai_api_key', 'image_api_key', 'image_fallback_keys', 'brave_api_key', 'civitai_api_key') if credentials.get(key)})
                 write_private_json(directory / 'connections.json', bot.features.credentials)
                 self.save_profile(identity, data)
             except Exception:

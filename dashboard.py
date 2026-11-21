@@ -21,6 +21,7 @@ import discord
 from openai import APIError
 from pydantic import BaseModel, ConfigDict, Field
 
+from civitai import CivitaiError
 from features import FeatureError, Settings, host_status, write_private_json
 from characters import CharacterInput, LoreInput, import_card, parse_character
 from images import BUILTIN_IMAGE_MODELS, ImageSpec
@@ -288,7 +289,8 @@ class Dashboard:
             'connections': {'chat': bool(bot.features.credentials.get('ai_api_key')),
                              'image': bool(bot.features.credentials.get('image_api_key')),
                              'image_keys': len({key for key in [bot.features.credentials.get('image_api_key'), *bot.features.credentials.get('image_fallback_keys', [])] if key}),
-                            'brave': bool(bot.features.credentials.get('brave_api_key'))},
+                            'brave': bool(bot.features.credentials.get('brave_api_key')),
+                            'civitai': bool(bot.features.credentials.get('civitai_api_key'))},
             'owner_id': str(bot.features.owner_id), 'people': people, 'channels': channels,
             'bot': next(profile for profile in summaries if profile['id'] == str(bot.bot_id)),
             'bots': summaries, 'manage_bots': self.manager is not None,
@@ -380,9 +382,13 @@ class Dashboard:
                 result = {'ok': True, 'result': await features.web_search('Discord developer documentation', 3)}
             elif kind == 'host_status' and features.settings.host_status_enabled:
                 result = {'ok': True, 'result': await host_status(features.settings.host_services)}
+            elif kind == 'civitai' and features.settings.civitai_enabled:
+                listing = await features.civitai.models(limit=3, sort='newest', period='week')
+                account = await features.civitai.account() if features.civitai.key() else {'signed_in': False}
+                result = {'ok': True, 'result': {**account, 'models': listing['models'], 'fetched_at': listing['fetched_at']}}
             else:
                 raise ValueError('This check is unknown or disabled in Tools.')
-        except (FeatureError, APIError, OSError, asyncio.TimeoutError) as exc:
+        except (FeatureError, CivitaiError, APIError, OSError, asyncio.TimeoutError) as exc:
             result = {'ok': False, 'error': features.clean_error(exc)}
         features.record_status(kind, result)
         return web.json_response(result)

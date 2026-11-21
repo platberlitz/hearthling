@@ -14,7 +14,7 @@ Members can talk to it. Server administration stays with you.
 
 - **Characters and memories.** Edit personalities, import character cards and keep shared lore across your bots.
 - **Your choice of AI.** Connect OpenAI-compatible services, Anthropic or Gemini, with fallback models.
-- **Pictures and search.** Generate or edit images, search with Brave and read public web pages.
+- **Pictures and search.** Generate or edit images, search with Brave, browse Civitai models and read public web pages.
 - **Everyday server tools.** Reminders, personal role colours, emojis and stickers. Moderation is owner-only.
 - **Optional scheduled posts.** GitHub releases, RSS roundups, conversation starters and daily Wordle.
 - **One-click updates.** Check GitHub for a newer version from the dashboard and install it, with automatic rollback if it won't start.

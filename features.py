@@ -25,6 +25,7 @@ from images import BUILTIN_IMAGE_MODELS, IMAGE_STYLE, ImageOptions, download_ima
 from conversation import image_sources, image_url, message_images, profile
 from appearances import about_person, grounded_prompt, public_appearance, request_appearances
 from web_sources import IMAGE_BYTES, PAGE_BYTES, fetch_resource, picture_extension, public_url, read_page
+from civitai import MODEL_TYPES as CIVITAI_MODEL_TYPES, Civitai, adult_allowed
 
 
 IMAGE_MODEL = 'gpt-image-1'
@@ -117,6 +118,8 @@ class Settings(SocialOptions, ProviderOptions, ImageOptions):
     image_quality: Literal['auto', 'low', 'medium', 'high', 'xhigh', 'max'] = 'high'
     search_enabled: bool = True
     public_search: bool = True
+    civitai_enabled: bool = True
+    public_civitai: bool = True
     member_pings: bool = True
     personal_colours: bool = True
     host_status_enabled: bool = True
@@ -181,7 +184,8 @@ class FeatureAction(BaseModel):
     action: Literal['generate_image', 'generate_gif', 'make_gif', 'web_search', 'web_fetch', 'image_search', 'post_image', 'post_media', 'host_status', 'remember', 'recall', 'forget', 'dashboard',
                     'set_reminder', 'list_reminders', 'cancel_reminder', 'set_timezone',
                     'list_expressions', 'react', 'send_sticker', 'add_emoji', 'add_sticker',
-                    'lookup_members', 'ping_member', 'set_my_colour']
+                    'lookup_members', 'ping_member', 'set_my_colour',
+                    'civitai_models', 'civitai_model', 'civitai_images', 'civitai_base_models']
     prompt: Annotated[str, Field(min_length=1, max_length=5000)] | None = None
     subjects: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
     size: ImageSize | None = None
@@ -215,6 +219,11 @@ class FeatureAction(BaseModel):
     emoji: str = Field(default='🙂', min_length=1, max_length=100)
     member: str | None = Field(default=None, max_length=100)
     colour: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
+    civitai_sort: Literal['newest', 'most_downloaded', 'highest_rated', 'most_reactions', 'most_comments'] | None = None
+    period: Literal['day', 'week', 'month', 'year', 'all'] | None = None
+    model_type: Literal[CIVITAI_MODEL_TYPES] | None = None
+    base_model: str | None = Field(default=None, max_length=60)
+    model_version_id: int | None = Field(default=None, ge=1)
 
 
 class FeatureError(ValueError):
@@ -266,6 +275,7 @@ class Features:
         self.memory_peers = [self]
         self.memory_epoch = 0
         self.search_cache = {}
+        self.civitai = Civitai(lambda: self.credentials)
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY, author_id TEXT NOT NULL, channel_id TEXT NOT NULL,
@@ -315,7 +325,7 @@ class Features:
         if getattr(self.bot, 'providers', None):
             for identity in settings.provider_order + ([settings.polisher_provider] if settings.polisher_provider else []):
                 self.bot.providers.get(identity)
-        if set(keys) - {'ai_api_key', 'image_api_key', 'image_fallback_keys', 'brave_api_key'}:
+        if set(keys) - {'ai_api_key', 'image_api_key', 'image_fallback_keys', 'brave_api_key', 'civitai_api_key'}:
             raise ValueError('Unknown connection key.')
         for name, value in keys.items():
             values = value if name == 'image_fallback_keys' else [value]
@@ -330,6 +340,7 @@ class Features:
             write_private_json(self.data_dir / 'connections.json', credentials)
             self.credentials = credentials
             self.search_cache.clear()
+            self.civitai.cache.clear()
         self.db.execute("INSERT OR REPLACE INTO settings VALUES ('configuration', ?)", (settings.model_dump_json(),))
         self.db.commit()
         self.settings = settings
@@ -369,6 +380,8 @@ class Features:
             allowed.append('set_my_colour')
         if self.settings.search_enabled and (owner or self.settings.public_search):
             allowed.extend(('web_search', 'web_fetch', 'image_search'))
+        if self.settings.civitai_enabled and (owner or self.settings.public_civitai):
+            allowed.extend(('civitai_models', 'civitai_model', 'civitai_images', 'civitai_base_models'))
         allowed.append('set_timezone')
         if self.settings.reminders_enabled:
             allowed.extend(('set_reminder', 'list_reminders', 'cancel_reminder'))
@@ -415,6 +428,13 @@ class Features:
                               'is not a playable video: describe the returned kind and note accurately. Private/login-only posts are unavailable. '
                              'lookup_members resolves real usernames, global names and server nicknames (query); ping_member uses member name/ID '
                              'to send a real requested notification here. set_my_colour sets ONLY the speaker’s personal role to colour #RRGGBB. '
+                             'Civitai (AI image models and pictures, read live): civitai_models searches or browses models with optional query, '
+                             'civitai_sort newest/most_downloaded/highest_rated, period day/week/month/year/all, model_type (Checkpoint, LORA, ...) '
+                             'and an exact base_model name from civitai_base_models (such as Flux.3 or Illustrious). civitai_model takes a model '
+                             'ID or civitai.com/models link in url and returns details, versions, trigger words and sample pictures. '
+                             'civitai_images lists pictures, optionally for one model_version_id, with civitai_sort most_reactions/most_comments/newest '
+                             'and period. Adult results are hidden outside age-restricted channels. To show a Civitai picture, post_image '
+                             'its image_url with its source_url; for an item whose kind is video, post_media its image_url instead. '
                              'generate_image creates requested new artwork; images attached to or linked in the request, and readable images '
                              'in the replied-to message, are sent to the provider automatically as source references. '
                              + (f'Every generated picture automatically gets the house art style ({self.settings.image_style}); write the prompt as content only and '
@@ -699,6 +719,8 @@ class Features:
             return await self.generate_image(args, request)
         if args.action == 'make_gif':
             return await self.make_gif(args, request)
+        if args.action.startswith('civitai_'):
+            return await self.civitai_lookup(args, request)
         if args.action == 'web_search':
             return await self.web_search(args.query, args.limit, args.freshness)
         if args.action == 'image_search':
@@ -921,6 +943,21 @@ class Features:
                                 ('uncertain' if exc.uncertain else 'retryable' if exc.retry_after else 'rejected', identity))
                 self.db.commit()
                 raise
+
+    async def civitai_lookup(self, args, request):
+        self.require_assistant()
+        if self.redact(args.query) != args.query:
+            raise ValueError('Civitai searches cannot contain saved credentials or private sign-in links.')
+        adult = adult_allowed(request)
+        if args.action == 'civitai_models':
+            return await self.civitai.models(query=args.query, limit=args.limit, sort=args.civitai_sort, period=args.period,
+                                             model_type=args.model_type, base_model=args.base_model, adult=adult)
+        if args.action == 'civitai_model':
+            return await self.civitai.model(args.url or args.query, adult=adult)
+        if args.action == 'civitai_images':
+            return await self.civitai.images(version=args.model_version_id, limit=args.limit, sort=args.civitai_sort,
+                                             period=args.period, adult=adult)
+        return {'source': 'https://civitai.com/models', 'base_models': await self.civitai.base_models()}
 
     def check_public_link(self, url):
         if self.redact(url) != url:

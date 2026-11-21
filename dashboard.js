@@ -259,6 +259,7 @@ function connectionHints() {
   $('#image-key-help').textContent = state.connections.image ? 'A key is saved. Leave blank to keep it.' : 'No image key is saved, so the conversation key is used.';
   $('#image-fallback-help').textContent = `${state.connections.image_keys || 0} distinct keys saved, including the primary. Blank fields keep the saved list; entering keys replaces the whole fallback list. Only a confirmed daily-quota rejection tries the next key.`;
   $('#brave-key-help').textContent = state.connections.brave ? 'A key is saved. Leave blank to keep it.' : 'No key is saved. Add your Brave API key here.';
+  $('#civitai-key-help').textContent = state.connections.civitai ? 'A key is saved and requests are signed in as you. Leave blank to keep it.' : 'Optional. Civitai listings work signed out; a key from Civitai\'s account settings signs requests in as you.';
 }
 
 for (const form of settingForms) {
@@ -305,6 +306,7 @@ const actionNames = {
   lookup_members: 'Find member identity', ping_member: 'Ping a member', set_my_colour: 'Change own role colour',
   list_expressions: 'List server expressions', react: 'React to a message', send_sticker: 'Send a sticker',
   add_emoji: 'Add a server emoji', add_sticker: 'Add a server sticker',
+  civitai_models: 'Search Civitai models', civitai_model: 'Open a Civitai model', civitai_images: 'Browse Civitai images', civitai_base_models: 'Civitai base models',
   remember: 'Remember a fact', recall: 'Recall memories', forget: 'Forget a memory', dashboard: 'Dashboard sign-in',
 };
 
@@ -320,7 +322,7 @@ async function refreshStatus() {
     $('#connection-dot').classList.toggle('connected', status.ready);
     $('#request-status').textContent = `${status.active_requests} active ${status.active_requests === 1 ? 'request' : 'requests'}${status.ready && status.latency_ms !== null ? ` · ${status.latency_ms} ms response time` : ''}`;
     $('#memory-count').textContent = status.memory_count;
-    const labels = [['chat', '#chat-status'], ['generate_image', '#image-status'], ['web_search', '#search-status'], ['host_status', '#host-status']];
+    const labels = [['chat', '#chat-status'], ['generate_image', '#image-status'], ['web_search', '#search-status'], ['civitai', '#civitai-status'], ['host_status', '#host-status']];
     for (const [name, selector] of labels) {
       const check = status.checks[name];
       let text = check ? `${check.ok ? 'Last request succeeded' : check.error || 'Last request failed'} · ${timeLabel(check.checked_at)}` : 'Not checked yet';
@@ -373,6 +375,21 @@ function checkResult(kind, data) {
     }
     container.append(list);
     if (!result.results.length) container.append(node('p', 'No web results were returned for this search.'));
+    return;
+  }
+  if (kind === 'civitai') {
+    container.append(node('h3', 'Civitai'));
+    container.append(node('p', `${result.signed_in ? `Signed in as ${result.username || 'your account'}` : 'Signed out'} · Fetched ${new Date(result.fetched_at).toLocaleString()}`, 'field-help'));
+    const list = node('ol');
+    for (const model of result.models) {
+      const item = node('li');
+      const link = node('a', model.name);
+      link.href = model.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      item.append(link, document.createTextNode(` · ${[model.type, model.base_model, model.creator].filter(Boolean).join(' · ')}`));
+      list.append(item);
+    }
+    container.append(node('p', 'Newest models this week:'), list);
+    if (!result.models.length) container.append(node('p', 'Civitai returned no new models this week.'));
     return;
   }
   container.append(node('h3', 'Host machine health'));

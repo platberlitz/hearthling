@@ -1,6 +1,7 @@
 """Offline checks for the RSS/Atom news roundup."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
@@ -56,6 +57,51 @@ async def main():
         assert failed == ['blog.example'] and len(found) == 3
         await expect_async_error(ValueError, news_module.collect(('https://blog.example/atom',)))
 
+    # Hugging Face model lists and Civitai's base model list are special addresses; everything else stays a feed.
+    trending_url = 'https://huggingface.co/api/models?pipeline_tag=text-to-image&sort=trendingScore&limit=15'
+    assert news_module.hugging_face_kind(trending_url) == 'text-to-image'
+    assert news_module.hugging_face_kind('https://huggingface.co/api/models/?sort=trendingScore') == 'AI'
+    assert news_module.hugging_face_kind('https://huggingface.co/blog/feed.xml') is None
+    assert news_module.hugging_face_kind('https://huggingface.co.evil.example/api/models') is None
+    assert news_module.feed_name(trending_url) == 'Hugging Face trending text-to-image'
+    assert news_module.feed_name(news_module.CIVITAI_ENUMS) == 'Civitai new base models'
+    assert news_module.feed_name('https://civitai.com/api/v1/models') == 'civitai.com'
+
+    trending = json.dumps([
+        {'id': 'Lab/Image-Model-2', 'createdAt': (NOW - timedelta(days=2)).isoformat(), 'likes': 400},
+        {'id': 'Someone/Image-Model-2-GGUF', 'createdAt': NOW.isoformat(), 'likes': 900},
+        {'id': 'Comfy-Org/Image-Model-2', 'createdAt': NOW.isoformat(), 'likes': 900},
+        {'id': 'Lab/Old-Model', 'createdAt': (NOW - timedelta(days=30)).isoformat(), 'likes': 5000},
+        {'id': 'Tiny/New', 'createdAt': NOW.isoformat(), 'likes': 60},
+        {'id': 'Fan/Seedreamstyle-H3', 'createdAt': NOW.isoformat(), 'likes': 500},
+        {'id': 'Fan/Image-Model-2-Character-Swap', 'createdAt': NOW.isoformat(), 'likes': 500},
+        {'id': 'Lab/Odd-Date', 'createdAt': 12, 'likes': 500},
+        {'id': 'Lab/No-Date', 'likes': 50}, 'junk']).encode()
+    models = news_module.trending_models('text-to-image', trending, now=NOW)
+    assert [item['url'] for item in models] == ['https://huggingface.co/Lab/Image-Model-2']
+    assert models[0]['source'] == 'Hugging Face trending text-to-image' and '400 likes' in models[0]['summary']
+    assert models[0]['title'] == 'Lab/Image-Model-2 is trending on Hugging Face' and models[0]['published_at'] == NOW.isoformat()
+    expect_error(ValueError, lambda: news_module.trending_models('AI', b'{"error": 1}'))
+    expect_error(ValueError, lambda: news_module.trending_models('AI', b'<html>'))
+
+    async def fake_resource(url, **kwargs):
+        assert url == trending_url
+        return {'body': trending}
+    async def civitai_source():
+        return [{'source': 'Civitai new base models', 'title': 'New base', 'url': 'https://civitai.com/models?baseModels=New',
+                 'published_at': NOW.isoformat(), 'summary': ''}]
+    async def civitai_down():
+        raise ValueError('down')
+    with patch('news.fetch_feed', new=fake_fetch), patch('news.fetch_resource', new=fake_resource):
+        found, failed = await news_module.collect((trending_url, news_module.CIVITAI_ENUMS, 'https://lab.example/rss'), civitai=civitai_source)
+        assert [item['title'] for item in found] == ['Lab/Image-Model-2 is trending on Hugging Face', 'New base', 'Release X & friends', 'Old news']
+        assert failed == []
+        # One broken source never stops the others.
+        found, failed = await news_module.collect((news_module.CIVITAI_ENUMS, 'https://lab.example/rss'), civitai=civitai_down)
+        assert failed == ['Civitai new base models'] and len(found) == 2
+        found, failed = await news_module.collect((news_module.CIVITAI_ENUMS, trending_url))
+        assert failed == ['Civitai new base models'] and len(found) == 1
+
     with tempfile.TemporaryDirectory(prefix='news-check-') as directory:
         db = open_database(Path(directory) / 'test.sqlite3')
         async with Hearthling(fake_ai(), db, credentials=CREDENTIALS, data_dir=directory) as bot:
@@ -66,6 +112,30 @@ async def main():
             bot.features.update_settings({'news_enabled': True, 'news_channel': str(CHANNEL_ID),
                                           'news_feeds': ['https://lab.example/rss', 'https://blog.example/atom']}, {})
             assert f'<#{CHANNEL_ID}>' in news.context() and 'every 6 hours' in news.context()
+
+            # The first Civitai read only records the existing base models; later reads report new ones until remembered.
+            assert news.civitai_baseline() is None
+            bot.features.civitai.base_models = AsyncMock(return_value=['Flux.1 D', 'SDXL 1.0'])
+            assert await news.civitai_items() == [] and news.civitai_baseline() == {'Flux.1 D', 'SDXL 1.0'}
+            bot.features.civitai.base_models = AsyncMock(return_value=['Flux.1 D', 'SDXL 1.0', 'Image Model 3'])
+            added = await news.civitai_items()
+            assert [item['civitai_base_model'] for item in added] == ['Image Model 3']
+            assert added[0]['url'] == 'https://civitai.com/models?baseModels=Image+Model+3' and added[0]['source'] == 'Civitai new base models'
+            news.remember(added, set())
+            assert await news.civitai_items() == [] and 'Image Model 3' in news.civitai_baseline()
+            assert db.execute("SELECT value FROM settings WHERE name='news:civitai_base_models'").fetchone()
+            # Checks hand the bot's own Civitai reader to collect.
+            with patch('news.collect', new=AsyncMock(return_value=([], []))) as collect:
+                news.channel = lambda: NS(id=CHANNEL_ID)
+                await news.check()
+                assert collect.await_args.kwargs['civitai'] == news.civitai_items
+            db.execute('DELETE FROM news_seen')
+            db.commit()
+            bot.features.update_settings({'news_feeds': ['https://lab.example/rss', news_module.CIVITAI_ENUMS]}, {})
+            assert 'Civitai new base models' in news.context()
+            bot.features.update_settings({'news_feeds': ['https://lab.example/rss', 'https://blog.example/atom']}, {})
+            db.execute("DELETE FROM settings WHERE name='status:news'")
+            db.commit()
 
             stories = items + atom
             channel = NS(id=CHANNEL_ID)

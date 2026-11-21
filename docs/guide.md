@@ -47,7 +47,7 @@ Each bot keeps separate conversation history per person per channel, so other me
 
 When you add extra Discord bot accounts in the dashboard, each account is set as either an **Assistant** or a **Chatbot**:
 
-- **Assistant:** conversation, shared memories and server expressions, plus whichever tools you enable (pictures, Brave search, reminders, emoji/sticker uploads and owner administration). Moderation, private server inspection, host checks and dashboard links still require the owner.
+- **Assistant:** conversation, shared memories and server expressions, plus whichever tools you enable (pictures, Brave search, Civitai browsing, reminders, emoji/sticker uploads and owner administration). Moderation, private server inspection, host checks and dashboard links still require the owner.
 - **Chatbot:** conversation, memories and existing server emojis, reactions and stickers. Every practical tool call is rejected in code, even if the owner asks. Invitation links for chatbots request basic chat permissions instead of Administrator.
 
 The primary account starts as an assistant; extra accounts default to chatbot unless you switch them in the **Bots** tab.
@@ -78,13 +78,14 @@ Hearthling, turn this attached GIF into a sticker called Cozy time.
 
 ## Pictures, web search and host health checks
 
-Assistants can generate images, search the web through Brave Search, read public web pages and run read-only host health checks.
+Assistants can generate images, search the web through Brave Search, browse Civitai, read public web pages and run read-only host health checks.
 
 - **Pictures:** supports OpenAI Images (`/images/generations` and `/images/edits`), OpenAI Responses (`image_generation` tool) and Google Gemini image generation (`:generateContent`). When a request or replied-to message includes a readable image, Hearthling passes the image bytes to the provider for editing rather than describing it from memory. Every generated picture is followed by the exact prompt sent to the image model. You can set an optional house art style in **Tools** (or leave it blank), add up to three fallback API keys, and configure named backup image providers. Confirmed rate limits and HTTP 401, 403 or 404 rejections try the next distinct key, then backup providers. An explicit 'no valid OpenAI API keys available for this model' response also permits a fallback. When the default connection uses Smolproxy, I share its saved keys with custom Smolproxy image models too, trying each model's own key first. Other services keep their own keys. Timeouts and uncertain server failures stop the attempt.
 
 On restart, I repair unfinished image records that stopped before submission or between confirmed refusals, including their saved action results, so queued requests can continue. Requests interrupted while waiting for a provider, or with a file already saved, stay blocked from automatic generation retries.
 - **Grounded subject appearances:** if someone asks 'draw me and Alice in a café', a coordinator step pulls the saved server-wide appearance memories for each subject before calling the image model so hair, eye colour, glasses and outfits stay consistent without leaking other people's private channel facts.
 - **Brave web and image search:** returns titles, snippets and links, plus a page reader that can open public URLs and read them in sections or attach original images found on the page with source links. Reddit posts, comments, subreddits and profiles are read through Reddit's public feeds, and sites that block automated readers are retried through the free r.jina.ai reader service.
+- **Civitai browsing:** I added a live Civitai reader to assistants. It searches and browses models by name, type, base model and period, opens a model's page for its versions, trigger words and sample pictures, lists popular pictures and names the base models Civitai supports. It works signed out; add an optional Civitai API key under **Connections** to sign requests in as you. Adult results only appear in age-restricted channels, and identical requests are reused for five minutes. Turn it off, or keep it to yourself, under **Civitai** in **Tools**.
 - **Host health check:** owner-only. Reads CPU load, uptime, memory, disk space, network counters and the `systemctl show` state of whichever systemd units you list under **Host health** in **Tools**. It never runs arbitrary shell commands.
 
 For edits, I pass your original request alongside the source image. The image model preserves the source scene and pose unless you ask to change them. Saved appearance details still apply, with your requested transformations taking priority.
@@ -143,7 +144,7 @@ Scheduled posts are opt-in. Spontaneous replies have a small default chance. Con
 - **Bot-to-bot exchanges:** when multiple managed bots share a channel, an eligible bot has a 10% chance to reply once to another managed bot before stopping, so they don't loop forever.
 - **Daily Wordle:** fetches the real NYT Wordle answer for the day, plays up to six guesses using the bot's own model and posts the spoiler-tagged share card (`X/6` if it loses, which rough models sometimes do).
 - **GitHub release announcements:** polls any list of `owner/repo` repositories every five minutes and posts newly published releases (including pre-releases, never drafts) to a chosen channel. The first check baselines existing tags so it doesn't flood the channel on setup.
-- **RSS / Atom news roundups:** polls your list of RSS or Atom feed URLs every N hours, filters unseen entries from the last 48 hours using your editable topic prompt, and posts a short sourced roundup with `<url>` links.
+- **RSS / Atom news roundups:** polls your list of RSS or Atom feed URLs every N hours, filters unseen entries from the last 48 hours using your editable topic prompt, and posts a short sourced roundup with `<url>` links. Two special addresses work in the same list. A Hugging Face model list, such as `https://huggingface.co/api/models?pipeline_tag=text-to-image&sort=trendingScore&limit=15`, reports original models from the past week with at least 100 likes; I skip quantised re-uploads, LoRAs, merges and similar spin-offs. `https://civitai.com/api/v1/enums` reports each new base model Civitai adds, which usually means a new image or video model has landed. Its first check only records the current list, so setup doesn't flood the channel.
 
 ## Characters and provider connections
 

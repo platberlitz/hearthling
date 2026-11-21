@@ -70,7 +70,8 @@ async def main():
             assert {'generate_image', 'generate_gif', 'make_gif', 'web_search', 'web_fetch', 'image_search', 'post_image', 'post_media', 'remember', 'recall', 'forget',
                     'set_timezone', 'set_reminder', 'list_reminders', 'cancel_reminder',
                     'list_expressions', 'react', 'send_sticker', 'add_emoji', 'add_sticker',
-                    'lookup_members', 'ping_member', 'set_my_colour'} == set(guest_actions)
+                    'lookup_members', 'ping_member', 'set_my_colour',
+                    'civitai_models', 'civitai_model', 'civitai_images', 'civitai_base_models'} == set(guest_actions)
             for action in ('host_status', 'dashboard'):
                 with patch.object(feature, 'perform', new=AsyncMock()) as perform:
                     result = await bot.execute(json.dumps({'action': action}), guest, tool='feature_tool')
