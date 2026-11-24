@@ -69,9 +69,11 @@ async def main():
         assert 'Describe this.' in json.dumps(body) and 'lookup' in json.dumps(body)
         if family == 'openai_chat':
             assert body['messages'][-1]['role'] == 'tool' and body['max_tokens'] == 512
+            assert 'parallel_tool_calls' not in body
         elif family == 'openai_responses':
             assert body['input'][-1]['type'] == 'function_call_output' and body['input'][-1]['call_id'] == 'call_test'
             assert body['store'] is False and body['tools'][0]['name'] == 'lookup'
+            assert 'parallel_tool_calls' not in body
         elif family == 'anthropic':
             assert body['system'] == 'Trusted instructions.' and body['messages'][-1]['content'][0]['tool_use_id'] == 'call_test'
         else:

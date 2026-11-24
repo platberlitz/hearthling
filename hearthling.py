@@ -816,7 +816,9 @@ class Hearthling(discord.Client):
                     'providers': self.providers.order(), 'sent_to_provider': False}
         try:
             for _ in range(MAX_TOOL_CALLS + 1):
-                options = {'tools': tools, 'parallel_tool_calls': False,
+                # Omit parallel_tool_calls=False: OpenAI-to-Gemini proxies (e.g. CLIProxyAPI) translate it to Gemini mode NONE, disabling all tools.
+                # The loop below executes returned tool calls sequentially and enforces MAX_TOOL_CALLS and stopped.
+                options = {'tools': tools,
                            'tool_choice': 'none' if stopped or calls_used >= MAX_TOOL_CALLS else 'auto'} if tools else {}
                 response = await model_reply(self, json.loads(self.features.redact(json.dumps(messages + turn + note))),
                                              **options)
@@ -1088,7 +1090,7 @@ async def check_connections(bot, token, *, server_id=SERVER_ID):
         print('Discord application, server, administrators and required intents: OK')
     messages = [{'role': 'user', 'content': 'Call discord_action with action server_info, then briefly report whether the connection check succeeded.'}]
     result = await bot.providers.reply(
-        messages, tools=[TOOL], parallel_tool_calls=False,
+        messages, tools=[TOOL],
         tool_choice={'type': 'function', 'function': {'name': 'discord_action'}}, max_tokens=4096,
     )
     answer = result.choices[0].message

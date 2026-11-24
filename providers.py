@@ -204,7 +204,7 @@ def build_request(spec, messages, options):
         body.update(input=inputs, max_output_tokens=limit, store=False)
         if tools:
             translated = {'type': 'function', 'name': choice['function']['name']} if isinstance(choice, dict) else choice
-            body.update(tools=[{'type': 'function', **tool['function']} for tool in tools], tool_choice=translated, parallel_tool_calls=False)
+            body.update(tools=[{'type': 'function', **tool['function']} for tool in tools], tool_choice=translated)
         if spec.reasoning_effort:
             body['reasoning'] = {'effort': spec.reasoning_effort}
     elif spec.family == 'anthropic':

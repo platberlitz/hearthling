@@ -196,6 +196,7 @@ async def main():
             with patch.object(bot, 'execute', new=AsyncMock(return_value={'ok': True, 'action': 'server_info'})) as execute:
                 await bot.converse(request)
                 assert execute.await_count == MAX_TOOL_CALLS
+                assert 'parallel_tool_calls' not in bot.ai.chat.completions.create.call_args_list[0].kwargs
                 assert bot.ai.chat.completions.create.call_args.kwargs['tool_choice'] == 'none'
             bot.ai.chat.completions.create = AsyncMock(side_effect=[ai_reply(calls=3), ai_reply(content='Stopped.')])
             with patch.object(bot, 'execute', new=AsyncMock(return_value={'ok': False, 'action': 'ban', 'outcome_may_be_uncertain': True})) as execute:
